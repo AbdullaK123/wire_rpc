@@ -1,7 +1,6 @@
 import asyncio
 from typing import Self
 
-
 class StdIoTransport:
 
     def __init__(self, *cmd: str):

@@ -1,55 +1,16 @@
 from msgspec import Struct, Meta
 from typing import Literal, Optional, Any, Annotated
 
+from wire_rpc.errors import WireError
+
 
 class WireSuccessResponse[T: Struct](Struct):
     result: T
     id: Optional[str | int] = None
     jsonrpc: Literal["2.0"] = "2.0"
-
-
-class ParseError(Struct):
-    message: str
-    data: Optional[Any] = None
-    code: Literal[-32700] = -32700
-
-class InvalidRequestError(Struct):
-    message: str
-    data: Optional[Any] = None
-    code: Literal[-32600] = -32600
-
-class MethodNotFoundError(Struct):
-    message: str
-    data: Optional[Any] = None
-    code: Literal[-32601] = -32601
-
-class InvalidParamsError(Struct):
-    message: str
-    data: Optional[Any] = None
-    code: Literal[-32602] = -32602
-
-class InternalError(Struct):
-    message: str
-    data: Optional[Any] = None
-    code: Literal[-32603] = -32603
-
-class ServerError(Struct):
-    message: str
-    code: Annotated[int, Meta(ge=-32099, le=-32000)]
-    data: Optional[Any] = None
-
-type WireError = (
-    ParseError |
-    InvalidRequestError | 
-    MethodNotFoundError | 
-    InvalidParamsError | 
-    InternalError | 
-    ServerError
-)
-
 class WireErrorResponse(Struct):
     error: WireError
     id: Optional[str | int] = None
     jsonrpc: Literal["2.0"] = "2.0"
 
-type WireResponse = WireSuccessResponse | WireErrorResponse
+type WireResponse[T: Struct] = WireSuccessResponse[T] | WireErrorResponse

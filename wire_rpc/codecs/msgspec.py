@@ -1,6 +1,9 @@
-from typing import Any
+from typing import Any, TypeVar
 
 import msgspec
+
+
+T = TypeVar("T")
 
 
 class MsgSpecJsonCodec:
@@ -11,7 +14,7 @@ class MsgSpecJsonCodec:
     def encode(self, obj: Any) -> bytes:
         return self.encoder.encode(obj)
 
-    def decode[T: msgspec.Struct](self, data: bytes, type: type[T]) -> T:
+    def decode(self, data: bytes, type: type[T]) -> T:
         return msgspec.json.decode(data, type=type)
 
 class MsgSpecMsgPackCodec:
@@ -22,5 +25,5 @@ class MsgSpecMsgPackCodec:
     def encode(self, obj: Any) -> bytes:
         return self.encoder.encode(obj)
 
-    def decode[T: msgspec.Struct](self, data: bytes, type: type[T]) -> T:
+    def decode(self, data: bytes, type: type[T]) -> T:
         return msgspec.msgpack.decode(data, type=type)
