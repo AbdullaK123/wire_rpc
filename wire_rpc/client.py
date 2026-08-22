@@ -42,6 +42,12 @@ class Client:
         self._transport = transport
         self._codec = codec
 
+    async def connect(self):
+        await self._transport.connect()
+
+    async def close(self):
+        await self._transport.close()
+
     async def __aenter__(self) -> Self:
         await self._transport.connect()
         return self

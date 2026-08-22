@@ -6,9 +6,6 @@ from typing_extensions import Self
 
 class Transport(Protocol):
 
-    @classmethod
-    def from_uri(cls, parsed: ParseResult) -> Self:
-        ...
     async def connect(self): 
         ...
     async def close(self): 
