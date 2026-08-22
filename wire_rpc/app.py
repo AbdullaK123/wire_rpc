@@ -1,13 +1,15 @@
 import asyncio
 from typing import Callable, Any, Awaitable, List, Optional
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
-from wire_rpc.errors import InternalError, InvalidRequestError, MethodNotFoundError
+from wire_rpc.errors import InternalError, InvalidParamsError, InvalidRequestError, MethodNotFoundError
 from wire_rpc.middleware import Middleware
 from wire_rpc.request import WireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
 from wire_rpc.transports import Transport
 from wire_rpc.codecs import Codec
 import msgspec
+from typing import get_type_hints, get_args, get_origin
+import inspect
 
 type AppContext = Any
 type Handler = Callable[[WireRequest, AppContext], Awaitable[WireResponse]]
@@ -26,12 +28,21 @@ class App:
         self._codec = codec
         self._ctx: Optional[Any] = None
         self._handlers : dict[str, Handler] = {}
+        self._param_types: dict[str, Any] = {}
+        self._return_types: dict[str, Any] = {}
         self._middleware: List[Middleware] = []
         self._on_startup: Optional[StartupHook] = None
         self._on_shutdown: Optional[ShutdownHook] = None
 
     def method(self, name: str) -> Callable:
         def decorator(func: Handler) -> Handler:
+            hints = get_type_hints(func)
+            sig = inspect.signature(func)
+            first_param = list(sig.parameters.keys())[0]
+            req_hint = hints[first_param]
+            args = get_args(req_hint)
+            self._param_types[name] = args[0] if args else None
+            self._return_types[name] = hints.get("return", None)
             self._handlers[name] = func
             return func
         return decorator
@@ -57,9 +68,22 @@ class App:
             )   
 
         handler = self._handlers[request.method]
+        params_type = self._param_types[request.method]
+        return_type = self._return_types[request.method]
+
+        if request.params is not None and params_type is not None:
+            try:
+                request.params = msgspec.convert(request.params, params_type)
+            except msgspec.ValidationError:
+                return WireErrorResponse(
+                    error=InvalidParamsError("Invalid params"),
+                    id=request.id
+                )
 
         async def call_handler(req: WireRequest, ctx: AppContext) -> WireResponse:
             result = await handler(req, ctx)
+            if return_type is not None:
+                result = msgspec.convert(result, return_type)
             return WireSuccessResponse(result=result, id=req.id)
 
         chain = call_handler

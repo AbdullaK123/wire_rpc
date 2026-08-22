@@ -8,14 +8,6 @@ from wire_rpc.response import WireResponse
 type AppContext = Any
 type Next = Callable[[WireRequest, AppContext], Awaitable[WireResponse]]
 
-class Handler[P: msgspec.Struct, T: msgspec.Struct](Protocol):
-    def __call__(
-        self, 
-        request: WireRequest[P], 
-        context: AppContext
-    ) -> Awaitable[T]:
-        ...
-
 class Middleware(Protocol):
     async def __call__(self, request: WireRequest, ctx: AppContext, next: Next) -> WireResponse:
         ...
