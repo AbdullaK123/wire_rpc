@@ -6,9 +6,10 @@ from wire_rpc.middleware import Middleware
 from wire_rpc.request import WireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
 from wire_rpc.transports import Transport
+from wire_rpc.logger import logger
 from wire_rpc.codecs import Codec
 import msgspec
-from typing import get_type_hints, get_args, get_origin
+from typing import get_type_hints, get_args
 import inspect
 
 type AppContext = Any
@@ -44,11 +45,13 @@ class App:
             self._param_types[name] = args[0] if args else None
             self._return_types[name] = hints.get("return", None)
             self._handlers[name] = func
+            logger.info(f"Registered handler for method '{name}' with parameter type '{self._param_types[name]}'")
             return func
         return decorator
 
     def middleware(self, func: Middleware) -> Callable:
         self._middleware.append(func)
+        logger.info(f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'")
         return func
 
     def on_startup(self, func: StartupHook) -> StartupHook:
@@ -61,7 +64,10 @@ class App:
 
     async def _dispatch(self, request: WireRequest) -> WireResponse:
 
+        logger.debug(f"Received request (id={request.id}) for method '{request.method}'")
+
         if request.method not in self._handlers.keys():
+            logger.warning(f"Method '{request.method}' not found.")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
                 id=request.id
@@ -75,6 +81,7 @@ class App:
             try:
                 request.params = msgspec.convert(request.params, params_type)
             except msgspec.ValidationError:
+                logger.warning(f"Invalid params for request (id={request.id}). Must be of type {str(params_type)}")
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
                     id=request.id
@@ -102,11 +109,13 @@ class App:
                 try:
                     data = await t.recv()
                 except (asyncio.IncompleteReadError, ConnectionError):
+                    logger.info("Server has shutdown. Goodbye...")
                     break
 
                 try:
                     request = self._codec.decode(data, WireRequest)
                 except msgspec.DecodeError:
+                    logger.warning(f"Failed to decode request bytes.")
                     err = WireErrorResponse(
                         error=InvalidRequestError("Invalid request. Request must follow json rpc 2.0 spec")
                     )
@@ -117,6 +126,7 @@ class App:
                 try: 
                     response = await self._dispatch(request)
                 except Exception as e:
+                    logger.opt(exception=True).error(f"Request (id={request.id}) failed with exception:\n {str(e)}")
                     err = InternalError(
                         message="Something went wrong. Please check logs.",
                         data={
@@ -130,17 +140,20 @@ class App:
 
                 encoded = self._codec.encode(response)
                 await t.send(encoded)
+                logger.info(f"Responded to request (id={request.id})")
 
     def run(self):
         asyncio.run(self._run())
 
     async def _run(self):
         if self._on_startup:
+            logger.info("Starting wire_rpc server...")
             self._ctx = await self._on_startup()
         try:
             await self._listen()
         finally:
             if self._on_shutdown:
+                logger.info("Shutting down server...")
                 await self._on_shutdown(self._ctx)
 
 
