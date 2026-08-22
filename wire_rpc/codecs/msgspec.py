@@ -27,3 +27,9 @@ class MsgSpecMsgPackCodec:
 
     def decode(self, data: bytes, type: type[T]) -> T:
         return msgspec.msgpack.decode(data, type=type)
+
+
+__all__ = [
+    "MsgSpecJsonCodec",
+    "MsgSpecMsgPackCodec"
+]

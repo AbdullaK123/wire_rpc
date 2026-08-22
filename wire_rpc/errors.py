@@ -41,3 +41,13 @@ type WireError = (
     InternalError | 
     ServerError
 )
+
+__all__ = [
+    "ParseError",
+    "InvalidRequestError",
+    "MethodNotFoundError",
+    "InvalidParamsError",
+    "InternalError",
+    "ServerError",
+    "WireError"
+]

@@ -9,3 +9,8 @@ dependencies = [
     "msgspec>=0.21.1",
     "typing-extensions>=4.16.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-requires = "hatchling"
+build-backend = "hatchling.build"
