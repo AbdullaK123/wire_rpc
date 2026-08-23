@@ -35,7 +35,7 @@ class HttpServerTransport:
     async def _handle(self, request: web.Request) -> web.Response:
 
         if self._auth:
-            user_id = self._auth.verify(request)
+            user_id = await self._auth.verify(request)
             if user_id is None:
                 raise web.HTTPUnauthorized(text="Invalid credentials")
 

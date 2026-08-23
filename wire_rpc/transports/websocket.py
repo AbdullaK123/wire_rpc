@@ -63,7 +63,7 @@ class WsServerTransport:
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
 
         if self._auth:
-            user_id = self._auth.verify(request)
+            user_id = await self._auth.verify(request)
             if user_id is None:
                 raise web.HTTPUnauthorized(text="Invalid credentials")
 

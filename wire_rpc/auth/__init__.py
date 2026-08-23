@@ -1,5 +1,5 @@
-from .protocol import Protocol
+from .protocol import Authenticator
 
 __all__ = [
-    "Protocol"
+    "Authenticator"
 ]

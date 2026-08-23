@@ -1,5 +1,4 @@
-from asyncio import Protocol
-from typing import Any
+from typing import Any, Protocol
 
 
 class Authenticator(Protocol):
