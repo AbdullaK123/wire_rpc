@@ -16,6 +16,9 @@ class HmacChallengAuth:
     async def login(self, request: Any) -> Any:
         return None
 
+    async def logout(self, request: Any) -> Any:
+        return None
+
     async def verify(self, request: Any) -> str | None:
 
         reader: asyncio.StreamReader = request[0]

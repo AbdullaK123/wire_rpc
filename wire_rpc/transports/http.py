@@ -23,6 +23,7 @@ class HttpServerTransport:
 
         if self._auth:
             self._app.router.add_post("/login", self._auth.login)
+            self._app.router.add_post("/logout", self._auth.logout)
 
         self._queue = asyncio.Queue()
         self._response_queue = asyncio.Queue()

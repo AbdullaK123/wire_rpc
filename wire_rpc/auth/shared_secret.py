@@ -15,6 +15,9 @@ class SharedSecretAuth:
     async def login(self, request: Any) -> Any:
         return None
 
+    async def logout(self, request: Any) -> Any:
+        return None
+
     async def verify(self, request: Any):
 
         reader: asyncio.StreamReader = request[0]

@@ -140,6 +140,7 @@ class MulticastWsServerTransport:
 
         if self._auth:
             app.router.add_post("/login", self._auth.login)
+            app.router.add_post("/logout", self._auth.logout)
 
         if self._static_dir:
             static_path = Path(self._static_dir)
