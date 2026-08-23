@@ -59,7 +59,7 @@ class MulticastApp:
                 first_hint = hints.get(params[0])
                 # If first param type is str, it's client_id for a no-params handler
                 # Otherwise check if it's a Struct (params type)
-                if first_hint is not None and first_hint is not str and first_hint is not type(None):
+                if first_hint is not None and isinstance(first_hint, type) and issubclass(first_hint, msgspec.Struct):
                     self._param_types[name] = first_hint
                 else:
                     self._param_types[name] = None
