@@ -5,22 +5,13 @@ Connects to a Wire RPC server via any transport and
 makes typed RPC calls.
 """
 
-from typing import Optional, Self
+from typing import Self
 
-import msgspec
 import uuid
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 from wire_rpc.codecs.protocol import Codec
 from wire_rpc.request import RawWireRequest
 from wire_rpc.transports.protocol import Transport
-
-
-class RawWireResponse(msgspec.Struct):
-    """Non-generic response for framework-level decoding."""
-    id: str | int | None = None
-    result: msgspec.Raw | msgspec.UnsetType = msgspec.UNSET
-    error: dict | None = None
-    jsonrpc: str = "2.0"
 
 
 class WireRpcError(Exception):
@@ -60,33 +51,35 @@ class Client:
     ):
         await self._transport.close()
 
-    async def call[R: msgspec.Struct](self, method: str, response_type: type[R], params: Optional[msgspec.Struct] = None) -> R:
+    async def call(self, method: str, response_type: type, params: object | None = None) -> object:
         request_id = str(uuid.uuid4())
         request = RawWireRequest(
             method=method,
             id=request_id,
-            params=msgspec.to_builtins(params) if params is not None else None
+            params=self._codec.convert(params, dict) if params is not None else None
         )
         data = self._codec.encode(request)
         await self._transport.send(data)
         response_bytes = await self._transport.recv()
 
-        # Decode the envelope
-        response = msgspec.json.decode(response_bytes, type=RawWireResponse)
+        # Decode the envelope as a raw dict
+        envelope = self._codec.decode(response_bytes, dict)
 
         # Check for error
-        if response.error is not None:
+        error = envelope.get("error")
+        if error is not None:
             raise WireRpcError(
-                code=response.error.get("code", -32603),
-                message=response.error.get("message", "Unknown error"),
-                data=response.error.get("data")
+                code=error.get("code", -32603),
+                message=error.get("message", "Unknown error"),
+                data=error.get("data")
             )
 
-        # Decode the result into the typed struct
-        if response.result is msgspec.UNSET:
+        # Decode the result into the typed target
+        result = envelope.get("result")
+        if result is None:
             raise WireRpcError(code=-32603, message="Response missing result")
 
-        return msgspec.json.decode(response.result, type=response_type)
+        return self._codec.convert(result, response_type)
 
 
     __all__ = [

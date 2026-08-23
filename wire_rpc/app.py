@@ -50,11 +50,9 @@ class App:
             hints = get_type_hints(func)
             sig = inspect.signature(func)
             first_param = list(sig.parameters.keys())[0]
-            first_hint = hints.get(first_param)
-            if first_hint is not None and isinstance(first_hint, type) and issubclass(first_hint, msgspec.Struct):
-                self._param_types[name] = first_hint
-            else:
-                self._param_types[name] = None
+            # Store the first param's type — codec.convert validates at dispatch
+            # param_count distinguishes (params, ctx) from (ctx) handlers
+            self._param_types[name] = hints.get(first_param)
             self._return_types[name] = hints.get("return", None)
             self._param_counts[name] = len(sig.parameters)
             self._handlers[name] = func
@@ -91,10 +89,10 @@ class App:
         return_type = self._return_types[request.method]
         has_params = self._param_counts[request.method] == 2
 
-        if request.params is not None and params_type is not None:
+        if request.params is not None and params_type is not None and has_params:
             try:
-                request.params = msgspec.convert(request.params, params_type)
-            except msgspec.ValidationError:
+                request.params = self._codec.convert(request.params, params_type)
+            except Exception:
                 logger.warning(f"Invalid params for request (id={request.id}). Must be of type {str(params_type)}")
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
@@ -107,7 +105,7 @@ class App:
             else:
                 result = await handler(ctx)
             if return_type is not None:
-                result = msgspec.convert(result, return_type)
+                result = self._codec.convert(result, return_type)
             return WireSuccessResponse(result=result, id=req.id)
 
         chain = call_handler

@@ -108,8 +108,8 @@ class MulticastApp:
 
         if request.params is not None and params_type is not None:
             try:
-                request.params = msgspec.convert(request.params, params_type)
-            except msgspec.ValidationError:
+                request.params = self._codec.convert(request.params, params_type)
+            except Exception:
                 logger.warning(f"Invalid params for request (id={request.id}). Must be of type {str(params_type)}")
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
@@ -132,7 +132,7 @@ class MulticastApp:
                 result = await handler(req.params, ctx, client_id)
 
             if return_type is not None:
-                result = msgspec.convert(result, return_type)
+                result = self._codec.convert(result, return_type)
             return WireSuccessResponse(result=result, id=req.id)
 
         chain = call_handler

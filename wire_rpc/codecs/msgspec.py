@@ -14,8 +14,14 @@ class MsgSpecJsonCodec:
     def encode(self, obj: Any) -> bytes:
         return self.encoder.encode(obj)
 
-    def decode(self, data: bytes, type: type[T]) -> T:
-        return msgspec.json.decode(data, type=type)
+    def decode(self, data: bytes, target: type[T]) -> T:
+        return msgspec.json.decode(data, type=target)
+
+    def convert(self, obj: Any, target: type[T]) -> T:
+        if target is dict:
+            return msgspec.to_builtins(obj)  # type: ignore
+        return msgspec.convert(obj, target)
+
 
 class MsgSpecMsgPackCodec:
 
@@ -25,8 +31,13 @@ class MsgSpecMsgPackCodec:
     def encode(self, obj: Any) -> bytes:
         return self.encoder.encode(obj)
 
-    def decode(self, data: bytes, type: type[T]) -> T:
-        return msgspec.msgpack.decode(data, type=type)
+    def decode(self, data: bytes, target: type[T]) -> T:
+        return msgspec.msgpack.decode(data, type=target)
+
+    def convert(self, obj: Any, target: type[T]) -> T:
+        if target is dict:
+            return msgspec.to_builtins(obj)  # type: ignore
+        return msgspec.convert(obj, target)
 
 
 __all__ = [
