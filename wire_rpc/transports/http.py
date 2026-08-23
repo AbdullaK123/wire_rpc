@@ -3,19 +3,27 @@ from aiohttp import web
 import aiohttp
 import asyncio
 
+from wire_rpc.auth.protocol import Authenticator
+
 class HttpServerTransport:
 
     def __init__(
         self,
         host: str,
-        port: int
+        port: int,
+        auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
+        self._auth = auth
 
     async def connect(self):
         self._app = web.Application()
         self._app.router.add_post("/rpc", self._handle)
+
+        if self._auth:
+            self._app.router.add_post("/login", self._auth.login)
+
         self._queue = asyncio.Queue()
         self._response_queue = asyncio.Queue()
         self._runner = web.AppRunner(self._app)
@@ -24,6 +32,12 @@ class HttpServerTransport:
         await site.start()
 
     async def _handle(self, request: web.Request) -> web.Response:
+
+        if self._auth:
+            user_id = self._auth.verify(request)
+            if user_id is None:
+                raise web.HTTPUnauthorized(text="Invalid credentials")
+
         data = await request.read()
         self._queue.put_nowait(data)
         response_data = await self._response_queue.get()

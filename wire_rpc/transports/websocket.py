@@ -22,11 +22,17 @@ from wire_rpc.logger import logger
 
 class WsServerTransport:
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8000, static_dir: str | None = None):
+    def __init__(
+        self, 
+        host: str = "0.0.0.0", 
+        port: int = 8000, 
+        static_dir: str | None = None,
+        auth: Authenticator | None = None
+    ):
         self._host = host
         self._port = port
         self._static_dir = static_dir
-        self._auth: Authenticator | None = None
+        self._auth = auth
         self._ws: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
