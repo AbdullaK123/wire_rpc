@@ -23,3 +23,26 @@ class Transport(Protocol):
         exc_tb: object
     ) -> None: 
         ...
+
+
+class MulticastTransport(Protocol):
+
+    async def connect(self):
+        ...
+    async def close(self):
+        ...
+    async def recv(self) -> tuple[str, bytes]:
+        ...
+    async def send(self, client_id: str, data: bytes):
+        ...
+    async def broadcast(self, data: bytes):
+        ...
+    async def __aenter__(self) -> Self: 
+        ...
+    async def __aexit__(
+        self, 
+        exc_type: type[BaseException] | None, 
+        exc_val: BaseException | None, 
+        exc_tb: object
+    ) -> None: 
+        ...
