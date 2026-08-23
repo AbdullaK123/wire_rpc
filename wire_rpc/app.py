@@ -50,7 +50,11 @@ class App:
             hints = get_type_hints(func)
             sig = inspect.signature(func)
             first_param = list(sig.parameters.keys())[0]
-            self._param_types[name] = hints.get(first_param)
+            first_hint = hints.get(first_param)
+            if first_hint is not None and isinstance(first_hint, type) and issubclass(first_hint, msgspec.Struct):
+                self._param_types[name] = first_hint
+            else:
+                self._param_types[name] = None
             self._return_types[name] = hints.get("return", None)
             self._param_counts[name] = len(sig.parameters)
             self._handlers[name] = func
