@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class CodecMiddleware(Protocol):
+    def encode(self, data: bytes) -> bytes: ...
+    def decode(self, data: bytes) -> bytes: ...
