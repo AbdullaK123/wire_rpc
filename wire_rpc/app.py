@@ -1,5 +1,4 @@
-"""
-Wire RPC application core.
+"""Wire RPC application core.
 
 The App class ties everything together:
     - Handler registration via @app.method()
@@ -9,17 +8,22 @@ The App class ties everything together:
 """
 
 import asyncio
-import inspect
-from typing import Callable, Any, Awaitable, List, Optional, get_type_hints, get_args
+from typing import Any, Awaitable, Callable, List, Optional
+
+from wire_rpc._handler import inspect_handler
+from wire_rpc.codecs import Codec, CodecConversionError, CodecDecodeError
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
-from wire_rpc.errors import InternalError, InvalidParamsError, InvalidRequestError, MethodNotFoundError
+from wire_rpc.errors import (
+    InternalError,
+    InvalidParamsError,
+    InvalidRequestError,
+    MethodNotFoundError,
+)
+from wire_rpc.logger import logger
 from wire_rpc.middleware import Middleware
-from wire_rpc.request import WireRequest, RawWireRequest
+from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
 from wire_rpc.transports import Transport
-from wire_rpc.logger import logger
-from wire_rpc.codecs import Codec
-import msgspec
 
 type AppContext = Any
 type Handler = Callable[..., Awaitable[Any]]
@@ -32,7 +36,7 @@ class App:
     def __init__(
         self,
         transport: Transport,
-        codec: Codec = MsgSpecJsonCodec()
+        codec: Codec = MsgSpecJsonCodec(),
     ):
         self._transport = transport
         self._codec = codec
@@ -40,29 +44,31 @@ class App:
         self._handlers: dict[str, Handler] = {}
         self._param_types: dict[str, Any] = {}
         self._return_types: dict[str, Any] = {}
-        self._param_counts: dict[str, int] = {}
+        self._has_params: dict[str, bool] = {}
         self._middleware: List[Middleware] = []
         self._on_startup: Optional[StartupHook] = None
         self._on_shutdown: Optional[ShutdownHook] = None
 
     def method(self, name: str) -> Callable:
         def decorator(func: Handler) -> Handler:
-            hints = get_type_hints(func)
-            sig = inspect.signature(func)
-            first_param = list(sig.parameters.keys())[0]
-            # Store the first param's type — codec.convert validates at dispatch
-            # param_count distinguishes (params, ctx) from (ctx) handlers
-            self._param_types[name] = hints.get(first_param)
-            self._return_types[name] = hints.get("return", None)
-            self._param_counts[name] = len(sig.parameters)
+            spec = inspect_handler(func, multicast=False)
+            self._param_types[name] = spec.params_type
+            self._return_types[name] = spec.return_type
+            self._has_params[name] = spec.has_params
             self._handlers[name] = func
-            logger.info(f"Registered handler for method '{name}' with parameter type '{self._param_types[name]}'")
+            logger.info(
+                f"Registered handler for method '{name}' "
+                f"with parameter type '{spec.params_type}'"
+            )
             return func
+
         return decorator
 
     def middleware(self, func: Middleware) -> Middleware:
         self._middleware.append(func)
-        logger.info(f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'")
+        logger.info(
+            f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'"
+        )
         return func
 
     def on_startup(self, func: StartupHook) -> StartupHook:
@@ -74,38 +80,47 @@ class App:
         return func
 
     async def _dispatch(self, request: RawWireRequest) -> WireResponse:
+        logger.debug(
+            f"Received request (id={request.id}) for method '{request.method}'"
+        )
 
-        logger.debug(f"Received request (id={request.id}) for method '{request.method}'")
-
-        if request.method not in self._handlers.keys():
+        if request.method not in self._handlers:
             logger.warning(f"Method '{request.method}' not found.")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
-                id=request.id
+                id=request.id,
             )
 
         handler = self._handlers[request.method]
         params_type = self._param_types[request.method]
         return_type = self._return_types[request.method]
-        has_params = self._param_counts[request.method] == 2
+        has_params = self._has_params[request.method]
 
         if request.params is not None and params_type is not None and has_params:
             try:
                 request.params = self._codec.convert(request.params, params_type)
-            except Exception:
-                logger.warning(f"Invalid params for request (id={request.id}). Must be of type {str(params_type)}")
+            except CodecConversionError:
+                logger.warning(
+                    f"Invalid params for request (id={request.id}). "
+                    f"Must be of type {params_type}"
+                )
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
-                    id=request.id
+                    id=request.id,
                 )
 
-        async def call_handler(req: RawWireRequest, ctx: AppContext) -> WireResponse:
+        async def call_handler(
+            req: RawWireRequest,
+            ctx: AppContext,
+        ) -> WireResponse:
             if has_params:
-                result = await handler(req.params, ctx) 
+                result = await handler(req.params, ctx)
             else:
                 result = await handler(ctx)
+
             if return_type is not None:
                 result = self._codec.convert(result, return_type)
+
             return WireSuccessResponse(result=result, id=req.id)
 
         chain = call_handler
@@ -119,7 +134,6 @@ class App:
     async def _listen(self):
         async with self._transport as t:
             while True:
-
                 try:
                     data = await t.recv()
                 except (asyncio.IncompleteReadError, ConnectionError):
@@ -128,32 +142,34 @@ class App:
 
                 try:
                     request = self._codec.decode(data, RawWireRequest)
-                except msgspec.DecodeError:
+                except CodecDecodeError:
                     logger.warning("Failed to decode request bytes.")
                     err = WireErrorResponse(
                         error=InvalidRequestError(
                             "Invalid request. Request must follow json rpc 2.0 spec"
                         )
                     )
-                    encoded = self._codec.encode(err)
-                    await t.send(encoded)
+                    await t.send(self._codec.encode(err))
                     continue
 
                 try:
                     response = await self._dispatch(request)
-                except Exception as e:
-                    logger.opt(exception=True).error(f"Request (id={request.id}) failed with exception:\n {str(e)}")
+                except Exception as exc:
+                    logger.opt(exception=True).error(
+                        f"Request (id={request.id}) failed with exception:\n {exc}"
+                    )
                     err = InternalError(
                         message="Something went wrong. Please check logs.",
-                        data={"error": str(e)}
+                        data={"error": str(exc)},
                     )
-                    err_response = WireErrorResponse(error=err, id=request.id)
-                    encoded = self._codec.encode(err_response)
-                    await t.send(encoded)
+                    await t.send(
+                        self._codec.encode(
+                            WireErrorResponse(error=err, id=request.id)
+                        )
+                    )
                     continue
 
-                encoded = self._codec.encode(response)
-                await t.send(encoded)
+                await t.send(self._codec.encode(response))
                 logger.info(f"Responded to request (id={request.id})")
 
     def run(self):
@@ -163,6 +179,7 @@ class App:
         if self._on_startup:
             logger.info("Starting wire_rpc server...")
             self._ctx = await self._on_startup()
+
         try:
             await self._listen()
         finally:

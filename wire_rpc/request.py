@@ -1,22 +1,19 @@
-"""
-Wire RPC request types.
+"""Wire RPC request types.
 
-WireRequest[P] — Generic version for handler type hints.
-                 Gives typed access to params in handlers.
+WireRequest[P] is the typed generic request shape.
 
-RawWireRequest — Non-generic version for framework-level
-                 decoding. Params decoded as a raw dict,
-                 then converted to the typed struct via
-                 msgspec.convert at dispatch time.
+RawWireRequest is the framework-level envelope. Params are decoded as
+untyped builtins, then converted by the active codec at dispatch time.
 """
 
 from __future__ import annotations
 
+from typing import Any, Literal, Optional
+
 from msgspec import Struct
-from typing import Literal, Optional, Any
 
 
-class WireRequest[P: Struct](Struct):
+class WireRequest[P](Struct):
     method: str
     id: Optional[str | int] = None
     params: Optional[P] = None

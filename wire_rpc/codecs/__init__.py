@@ -1,5 +1,15 @@
-from .protocol import Codec
+from .protocol import (
+    Codec,
+    CodecConversionError,
+    CodecDecodeError,
+    CodecEncodeError,
+    CodecError,
+)
 
 __all__ = [
-    "Codec"
+    "Codec",
+    "CodecError",
+    "CodecEncodeError",
+    "CodecDecodeError",
+    "CodecConversionError",
 ]

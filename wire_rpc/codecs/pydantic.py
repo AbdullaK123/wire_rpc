@@ -1,21 +1,53 @@
-from pydantic import BaseModel
+from typing import Any, TypeVar, cast, get_args
+
 import msgspec
-from typing import Any, TypeVar, cast
+from pydantic import BaseModel, TypeAdapter
+
+from .protocol import CodecConversionError, CodecDecodeError, CodecEncodeError
 
 T = TypeVar("T")
 
+
+def _uses_pydantic(target: Any) -> bool:
+    if isinstance(target, type) and issubclass(target, BaseModel):
+        return True
+    return any(_uses_pydantic(arg) for arg in get_args(target))
+
+
+def _enc_hook(obj: Any) -> Any:
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
+    raise NotImplementedError
+
+
 class PydanticCodec:
+
+    def __init__(self):
+        self.encoder = msgspec.json.Encoder(enc_hook=_enc_hook)
+
     def encode(self, obj: Any) -> bytes:
-        if isinstance(obj, BaseModel):
-            return obj.model_dump_json().encode()
-        return msgspec.json.encode(obj)
+        try:
+            return self.encoder.encode(obj)
+        except Exception as exc:
+            raise CodecEncodeError(str(exc)) from exc
 
-    def decode(self, data: bytes, target: type[T]) -> T:
-        if issubclass(target, BaseModel):
-            return cast(T, target.model_validate_json(data))
-        return msgspec.json.decode(data, type=target)
+    def decode(self, data: bytes, target: Any) -> T:
+        try:
+            if _uses_pydantic(target):
+                return cast(T, TypeAdapter(target).validate_json(data))
+            return cast(T, msgspec.json.decode(data, type=target))
+        except Exception as exc:
+            raise CodecDecodeError(str(exc)) from exc
 
-    def convert(self, obj: Any, target: type[T]) -> T:
-        if issubclass(target, BaseModel):
-            return cast(T, target.model_validate(obj))
-        return msgspec.convert(obj, target)
+    def convert(self, obj: Any, target: Any) -> T:
+        try:
+            if target is dict:
+                return cast(T, msgspec.to_builtins(obj, enc_hook=_enc_hook))
+            if _uses_pydantic(target):
+                return cast(T, TypeAdapter(target).validate_python(obj))
+            return cast(T, msgspec.convert(obj, target))
+        except Exception as exc:
+            raise CodecConversionError(str(exc)) from exc
+
+
+__all__ = ["PydanticCodec"]

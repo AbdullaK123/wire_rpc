@@ -1,23 +1,27 @@
-"""
-Wire RPC multicast application core.
+"""Wire RPC multicast application core.
 
-Like App, but for multi-client scenarios. Each handler
-receives a client_id identifying who sent the request.
-The transport is exposed for broadcasting to all clients.
+Like App, but for multi-client scenarios. Each handler may receive a
+client_id identifying who sent the request, and the app can broadcast
+notifications to all connected clients.
 """
 
 import asyncio
-import inspect
-from typing import Callable, Any, Awaitable, List, Optional, get_type_hints, get_args
+from typing import Any, Awaitable, Callable, List, Optional
+
+from wire_rpc._handler import inspect_handler
+from wire_rpc.codecs import Codec, CodecConversionError, CodecDecodeError
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
-from wire_rpc.errors import InternalError, InvalidParamsError, InvalidRequestError, MethodNotFoundError
+from wire_rpc.errors import (
+    InternalError,
+    InvalidParamsError,
+    InvalidRequestError,
+    MethodNotFoundError,
+)
+from wire_rpc.logger import logger
 from wire_rpc.middleware import Middleware
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
 from wire_rpc.transports.protocol import MulticastTransport
-from wire_rpc.logger import logger
-from wire_rpc.codecs.protocol import Codec
-import msgspec
 
 type AppContext = Any
 type Handler = Callable[..., Awaitable[Any]]
@@ -30,7 +34,7 @@ class MulticastApp:
     def __init__(
         self,
         transport: MulticastTransport,
-        codec: Codec = MsgSpecJsonCodec()
+        codec: Codec = MsgSpecJsonCodec(),
     ):
         self._transport = transport
         self._codec = codec
@@ -38,7 +42,8 @@ class MulticastApp:
         self._handlers: dict[str, Handler] = {}
         self._param_types: dict[str, Any] = {}
         self._return_types: dict[str, Any] = {}
-        self._param_counts: dict[str, int] = {}
+        self._has_params: dict[str, bool] = {}
+        self._receives_client_id: dict[str, bool] = {}
         self._middleware: List[Middleware] = []
         self._on_startup: Optional[StartupHook] = None
         self._on_shutdown: Optional[ShutdownHook] = None
@@ -49,31 +54,25 @@ class MulticastApp:
 
     def method(self, name: str) -> Callable:
         def decorator(func: Handler) -> Handler:
-            hints = get_type_hints(func)
-            sig = inspect.signature(func)
-            params = list(sig.parameters.keys())
-            # Count params excluding ctx and client_id
-            # Handlers: (ctx) or (params, ctx) or (params, ctx, client_id) or (ctx, client_id)
-            self._param_counts[name] = len(sig.parameters)
-            if len(params) >= 1:
-                first_hint = hints.get(params[0])
-                # If first param type is str, it's client_id for a no-params handler
-                # Otherwise check if it's a Struct (params type)
-                if first_hint is not None and isinstance(first_hint, type) and issubclass(first_hint, msgspec.Struct):
-                    self._param_types[name] = first_hint
-                else:
-                    self._param_types[name] = None
-            else:
-                self._param_types[name] = None
-            self._return_types[name] = hints.get("return", None)
+            spec = inspect_handler(func, multicast=True)
+            self._param_types[name] = spec.params_type
+            self._return_types[name] = spec.return_type
+            self._has_params[name] = spec.has_params
+            self._receives_client_id[name] = spec.receives_client_id
             self._handlers[name] = func
-            logger.info(f"Registered handler for method '{name}' with parameter type '{self._param_types[name]}'")
+            logger.info(
+                f"Registered handler for method '{name}' "
+                f"with parameter type '{spec.params_type}'"
+            )
             return func
+
         return decorator
 
     def middleware(self, func: Middleware) -> Middleware:
         self._middleware.append(func)
-        logger.info(f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'")
+        logger.info(
+            f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'"
+        )
         return func
 
     def on_startup(self, func: StartupHook) -> StartupHook:
@@ -84,55 +83,63 @@ class MulticastApp:
         self._on_shutdown = func
         return func
 
-    async def broadcast(self, method: str, data: Any) -> None:
+    async def broadcast(self, method: str, data: Any = None) -> None:
         """Broadcast a JSON-RPC notification to all connected clients."""
-        notification = RawWireRequest(method=method, params=msgspec.to_builtins(data))
-        encoded = self._codec.encode(notification)
-        await self._transport.broadcast(encoded)
+        notification = RawWireRequest(method=method, params=data)
+        await self._transport.broadcast(self._codec.encode(notification))
 
-    async def _dispatch(self, request: RawWireRequest, client_id: str) -> WireResponse:
+    async def _dispatch(
+        self,
+        request: RawWireRequest,
+        client_id: str,
+    ) -> WireResponse:
+        logger.debug(
+            f"Received request (id={request.id}) from client {client_id} "
+            f"for method '{request.method}'"
+        )
 
-        logger.debug(f"Received request (id={request.id}) from client {client_id} for method '{request.method}'")
-
-        if request.method not in self._handlers.keys():
+        if request.method not in self._handlers:
             logger.warning(f"Method '{request.method}' not found.")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
-                id=request.id
+                id=request.id,
             )
 
         handler = self._handlers[request.method]
         params_type = self._param_types[request.method]
         return_type = self._return_types[request.method]
-        param_count = self._param_counts[request.method]
+        has_params = self._has_params[request.method]
+        receives_client_id = self._receives_client_id[request.method]
 
-        if request.params is not None and params_type is not None:
+        if request.params is not None and params_type is not None and has_params:
             try:
                 request.params = self._codec.convert(request.params, params_type)
-            except Exception:
-                logger.warning(f"Invalid params for request (id={request.id}). Must be of type {str(params_type)}")
+            except CodecConversionError:
+                logger.warning(
+                    f"Invalid params for request (id={request.id}). "
+                    f"Must be of type {params_type}"
+                )
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
-                    id=request.id
+                    id=request.id,
                 )
 
-        async def call_handler(req: RawWireRequest, ctx: AppContext) -> WireResponse:
-            # Determine handler signature:
-            # 1 param:  (ctx)
-            # 2 params: (params, ctx) or (ctx, client_id)
-            # 3 params: (params, ctx, client_id)
-            if param_count == 1:
-                result = await handler(ctx)
-            elif param_count == 2:
-                if params_type is not None:
-                    result = await handler(req.params, ctx)
-                else:
-                    result = await handler(ctx, client_id)
-            else:
+        async def call_handler(
+            req: RawWireRequest,
+            ctx: AppContext,
+        ) -> WireResponse:
+            if has_params and receives_client_id:
                 result = await handler(req.params, ctx, client_id)
+            elif has_params:
+                result = await handler(req.params, ctx)
+            elif receives_client_id:
+                result = await handler(ctx, client_id)
+            else:
+                result = await handler(ctx)
 
             if return_type is not None:
                 result = self._codec.convert(result, return_type)
+
             return WireSuccessResponse(result=result, id=req.id)
 
         chain = call_handler
@@ -146,7 +153,6 @@ class MulticastApp:
     async def _listen(self):
         async with self._transport as t:
             while True:
-
                 try:
                     client_id, data = await t.recv()
                 except (asyncio.IncompleteReadError, ConnectionError):
@@ -155,42 +161,51 @@ class MulticastApp:
 
                 try:
                     request = self._codec.decode(data, RawWireRequest)
-                except msgspec.DecodeError:
-                    logger.warning(f"Failed to decode request bytes from client {client_id}.")
+                except CodecDecodeError:
+                    logger.warning(
+                        f"Failed to decode request bytes from client {client_id}."
+                    )
                     err = WireErrorResponse(
                         error=InvalidRequestError(
                             "Invalid request. Request must follow json rpc 2.0 spec"
                         )
                     )
-                    encoded = self._codec.encode(err)
                     try:
-                        await t.send(client_id, encoded)
+                        await t.send(client_id, self._codec.encode(err))
                     except ConnectionError:
                         pass
                     continue
 
                 try:
                     response = await self._dispatch(request, client_id)
-                except Exception as e:
-                    logger.opt(exception=True).error(f"Request (id={request.id}) from client {client_id} failed")
+                except Exception as exc:
+                    logger.opt(exception=True).error(
+                        f"Request (id={request.id}) from client {client_id} failed"
+                    )
                     err = InternalError(
                         message="Something went wrong. Please check logs.",
-                        data={"error": str(e)}
+                        data={"error": str(exc)},
                     )
-                    err_response = WireErrorResponse(error=err, id=request.id)
-                    encoded = self._codec.encode(err_response)
                     try:
-                        await t.send(client_id, encoded)
+                        await t.send(
+                            client_id,
+                            self._codec.encode(
+                                WireErrorResponse(error=err, id=request.id)
+                            ),
+                        )
                     except ConnectionError:
                         pass
                     continue
 
-                encoded = self._codec.encode(response)
                 try:
-                    await t.send(client_id, encoded)
+                    await t.send(client_id, self._codec.encode(response))
                 except ConnectionError:
-                    logger.warning(f"Client {client_id} disconnected before response could be sent")
-                logger.debug(f"Responded to request (id={request.id}) for client {client_id}")
+                    logger.warning(
+                        f"Client {client_id} disconnected before response could be sent"
+                    )
+                logger.debug(
+                    f"Responded to request (id={request.id}) for client {client_id}"
+                )
 
     def run(self):
         asyncio.run(self._run())
@@ -199,6 +214,7 @@ class MulticastApp:
         if self._on_startup:
             logger.info("Starting wire_rpc multicast server...")
             self._ctx = await self._on_startup()
+
         try:
             await self._listen()
         finally:
