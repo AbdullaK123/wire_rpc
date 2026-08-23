@@ -3,7 +3,7 @@
 Connects to a Wire RPC server via any transport and makes typed RPC calls.
 """
 
-from typing import Any, Self, TypeVar
+from typing import Any, Self, TypeVar, cast
 import uuid
 
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
@@ -68,7 +68,7 @@ class Client:
         await self._transport.send(data)
         response_bytes = await self._transport.recv()
 
-        envelope = self._codec.decode(response_bytes, dict)
+        envelope = cast(dict[str, Any], self._codec.decode(response_bytes, dict))
 
         error = envelope.get("error")
         if error is not None:
@@ -81,7 +81,7 @@ class Client:
         if "result" not in envelope:
             raise WireRpcError(code=-32603, message="Response missing result")
 
-        return self._codec.convert(envelope["result"], response_type)
+        return cast(T, self._codec.convert(envelope["result"], response_type))
 
 
 __all__ = [

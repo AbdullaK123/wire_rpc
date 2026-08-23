@@ -1,11 +1,9 @@
-from typing import Any, TypeVar, cast, get_args
+from typing import Any, get_args
 
 import msgspec
 from pydantic import BaseModel, TypeAdapter
 
 from .protocol import CodecConversionError, CodecDecodeError, CodecEncodeError
-
-T = TypeVar("T")
 
 
 def _uses_pydantic(target: Any) -> bool:
@@ -31,21 +29,21 @@ class PydanticCodec:
         except Exception as exc:
             raise CodecEncodeError(str(exc)) from exc
 
-    def decode(self, data: bytes, target: Any) -> T:
+    def decode(self, data: bytes, target: Any) -> Any:
         try:
             if _uses_pydantic(target):
-                return cast(T, TypeAdapter(target).validate_json(data))
-            return cast(T, msgspec.json.decode(data, type=target))
+                return TypeAdapter(target).validate_json(data)
+            return msgspec.json.decode(data, type=target)
         except Exception as exc:
             raise CodecDecodeError(str(exc)) from exc
 
-    def convert(self, obj: Any, target: Any) -> T:
+    def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return cast(T, msgspec.to_builtins(obj, enc_hook=_enc_hook))
+                return msgspec.to_builtins(obj, enc_hook=_enc_hook)
             if _uses_pydantic(target):
-                return cast(T, TypeAdapter(target).validate_python(obj))
-            return cast(T, msgspec.convert(obj, target))
+                return TypeAdapter(target).validate_python(obj)
+            return msgspec.convert(obj, target)
         except Exception as exc:
             raise CodecConversionError(str(exc)) from exc
 

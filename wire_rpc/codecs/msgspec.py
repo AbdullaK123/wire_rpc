@@ -1,10 +1,8 @@
-from typing import Any, TypeVar, cast
+from typing import Any
 
 import msgspec
 
 from .protocol import CodecConversionError, CodecDecodeError, CodecEncodeError
-
-T = TypeVar("T")
 
 
 def _to_builtins(obj: Any) -> Any:
@@ -22,17 +20,17 @@ class MsgSpecJsonCodec:
         except Exception as exc:
             raise CodecEncodeError(str(exc)) from exc
 
-    def decode(self, data: bytes, target: Any) -> T:
+    def decode(self, data: bytes, target: Any) -> Any:
         try:
-            return cast(T, msgspec.json.decode(data, type=target))
+            return msgspec.json.decode(data, type=target)
         except Exception as exc:
             raise CodecDecodeError(str(exc)) from exc
 
-    def convert(self, obj: Any, target: Any) -> T:
+    def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return cast(T, _to_builtins(obj))
-            return cast(T, msgspec.convert(obj, target))
+                return _to_builtins(obj)
+            return msgspec.convert(obj, target)
         except Exception as exc:
             raise CodecConversionError(str(exc)) from exc
 
@@ -48,17 +46,17 @@ class MsgSpecMsgPackCodec:
         except Exception as exc:
             raise CodecEncodeError(str(exc)) from exc
 
-    def decode(self, data: bytes, target: Any) -> T:
+    def decode(self, data: bytes, target: Any) -> Any:
         try:
-            return cast(T, msgspec.msgpack.decode(data, type=target))
+            return msgspec.msgpack.decode(data, type=target)
         except Exception as exc:
             raise CodecDecodeError(str(exc)) from exc
 
-    def convert(self, obj: Any, target: Any) -> T:
+    def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return cast(T, _to_builtins(obj))
-            return cast(T, msgspec.convert(obj, target))
+                return _to_builtins(obj)
+            return msgspec.convert(obj, target)
         except Exception as exc:
             raise CodecConversionError(str(exc)) from exc
 

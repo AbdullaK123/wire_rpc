@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TypeVar
-
-T = TypeVar("T")
+from typing import Any, Protocol
 
 
 class CodecError(Exception):
@@ -27,10 +25,10 @@ class Codec(Protocol):
     def encode(self, obj: Any) -> bytes:
         ...
 
-    def decode(self, data: bytes, target: Any) -> T:
+    def decode(self, data: bytes, target: Any) -> Any:
         ...
 
-    def convert(self, obj: Any, target: Any) -> T:
+    def convert(self, obj: Any, target: Any) -> Any:
         ...
 
 
