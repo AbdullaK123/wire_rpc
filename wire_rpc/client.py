@@ -5,7 +5,7 @@ Connects to a Wire RPC server via any transport and
 makes typed RPC calls.
 """
 
-from typing import Self
+from typing import Optional, Self
 
 import msgspec
 import uuid
@@ -60,12 +60,12 @@ class Client:
     ):
         await self._transport.close()
 
-    async def call[R: msgspec.Struct](self, method: str, params: msgspec.Struct, response_type: type[R]) -> R:
+    async def call[R: msgspec.Struct](self, method: str, response_type: type[R], params: Optional[msgspec.Struct] = None) -> R:
         request_id = str(uuid.uuid4())
         request = RawWireRequest(
             method=method,
             id=request_id,
-            params=msgspec.to_builtins(params)
+            params=msgspec.to_builtins(params) if params is not None else None
         )
         data = self._codec.encode(request)
         await self._transport.send(data)
