@@ -16,6 +16,7 @@ from typing import Self
 import uuid
 import aiohttp
 from aiohttp import web
+from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
 
 
@@ -25,6 +26,7 @@ class WsServerTransport:
         self._host = host
         self._port = port
         self._static_dir = static_dir
+        self._auth: Authenticator | None = None
         self._ws: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
@@ -33,6 +35,9 @@ class WsServerTransport:
     async def connect(self):
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
+
+        if self._auth:
+            app.router.add_post("/login", self._auth.login)
 
         if self._static_dir:
             # Serve index.html on /
@@ -50,6 +55,12 @@ class WsServerTransport:
         await self._connected.wait()
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
+
+        if self._auth:
+            user_id = self._auth.verify(request)
+            if user_id is None:
+                raise web.HTTPUnauthorized(text="Invalid credentials")
+
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self._ws = ws
@@ -105,7 +116,8 @@ class MulticastWsServerTransport:
         self,
         host: str = "0.0.0.0",
         port: int = 8000,
-        static_dir: str | None = None
+        static_dir: str | None = None,
+        auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
@@ -113,12 +125,15 @@ class MulticastWsServerTransport:
         self._clients: dict[str, web.WebSocketResponse] = {}
         self._runner: web.AppRunner | None = None
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
-
+        self._auth = auth
 
     async def connect(self):
 
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
+
+        if self._auth:
+            app.router.add_post("/login", self._auth.login)
 
         if self._static_dir:
             static_path = Path(self._static_dir)
@@ -140,9 +155,17 @@ class MulticastWsServerTransport:
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
 
+        client_id = str(uuid.uuid4())[:8]
+
+        if self._auth:
+            user_id = await self._auth.verify(request)
+            if user_id is None:
+                raise web.HTTPUnauthorized(text="Invalid credentials")
+            client_id = user_id
+
         ws = web.WebSocketResponse()
         await ws.prepare(request)   
-        client_id = str(uuid.uuid4())[:8]
+     
         self._clients[client_id] = ws
 
         logger.info(f"Client {client_id} connected ({len(self._clients)} total)")
