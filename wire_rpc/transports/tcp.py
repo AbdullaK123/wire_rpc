@@ -163,6 +163,14 @@ class TcpMulticastServerTransport:
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         self._server: asyncio.Server | None = None
 
+    async def startup(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.startup()
+        
+    async def shutdown(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
+
     async def connect(self) -> None:
         self._server = await asyncio.start_server(
             self._handle_client, self._host, self._port
