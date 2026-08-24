@@ -1,7 +1,12 @@
 from __future__ import annotations
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from urllib.parse import ParseResult
 from typing_extensions import Self
+
+@runtime_checkable
+class StartupComponent(Protocol):
+    async def startup(self) -> None: ...
+    async def shutdown(self) -> None: ...
 
 
 class Transport(Protocol):

@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 
 from wire_rpc.auth.protocol import Authenticator
+from wire_rpc.transports.protocol import StartupComponent
 
 class HttpServerTransport:
 
@@ -22,6 +23,10 @@ class HttpServerTransport:
         self._app.router.add_post("/rpc", self._handle)
 
         if self._auth:
+
+            if isinstance(self._auth, StartupComponent):
+                await self._auth.startup()
+
             self._app.router.add_post("/login", self._auth.login)
             self._app.router.add_post("/logout", self._auth.logout)
 
@@ -51,6 +56,10 @@ class HttpServerTransport:
         self._response_queue.put_nowait(data)
 
     async def close(self):
+
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
+
         await self._runner.cleanup()
 
     async def __aenter__(self) -> Self:

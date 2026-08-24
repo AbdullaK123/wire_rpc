@@ -3,6 +3,8 @@ from wire_rpc.auth.sessions.memory import InMemorySessionStore
 from wire_rpc.auth.sessions.protocol import SessionStore
 from aiohttp import web
 
+from wire_rpc.transports.protocol import StartupComponent
+
 class CookieSessionAuth:
     """
     Cookie-based session authenticator for web transports.
@@ -25,7 +27,21 @@ class CookieSessionAuth:
         self._cookie_name = cookie_name
         self._secure = secure
         self._max_age = max_age
- 
+
+    async def startup(self) -> None:
+        if isinstance(self._validator, StartupComponent):
+            await self._validator.startup()
+
+        if isinstance(self._sessions, StartupComponent):
+            await self._sessions.startup()
+
+    async def shutdown(self) -> None:
+        if isinstance(self._sessions, StartupComponent):
+            await self._sessions.shutdown()
+
+        if isinstance(self._validator, StartupComponent):
+            await self._validator.shutdown()
+    
     async def login(self, request: web.Request) -> web.Response:
         try:
             body = await request.json()

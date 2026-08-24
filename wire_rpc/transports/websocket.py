@@ -18,6 +18,7 @@ import aiohttp
 from aiohttp import web
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports.protocol import StartupComponent
 
 
 class WsServerTransport:
@@ -43,6 +44,10 @@ class WsServerTransport:
         app.router.add_get("/ws", self._handle_ws)
 
         if self._auth:
+
+            if isinstance(self._auth, StartupComponent):
+                await self._auth.startup()
+
             app.router.add_post("/login", self._auth.login)
             app.router.add_post("/logout", self._auth.logout)
 
@@ -87,6 +92,10 @@ class WsServerTransport:
         return ws
 
     async def close(self):
+
+        if isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
+            
         if self._ws:
             await self._ws.close()
             self._ws = None
@@ -135,11 +144,16 @@ class MulticastWsServerTransport:
         self._auth = auth
 
     async def connect(self):
+        
 
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
 
         if self._auth:
+
+            if isinstance(self._auth, StartupComponent):
+                await self._auth.startup()
+
             app.router.add_post("/login", self._auth.login)
             app.router.add_post("/logout", self._auth.logout)
 
@@ -217,6 +231,9 @@ class MulticastWsServerTransport:
             del self._clients[client_id]
 
     async def close(self):
+
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
 
         for client_id, ws in self._clients.items():
             await ws.close()
