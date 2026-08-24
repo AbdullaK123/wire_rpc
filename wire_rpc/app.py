@@ -10,7 +10,7 @@ The App class ties everything together:
 import asyncio
 from typing import Any, Awaitable, Callable, List, Optional
 
-from wire_rpc._handler import inspect_handler
+from wire_rpc._handler import HandlerSpec, inspect_handler
 from wire_rpc.codecs import Codec, CodecConversionError, CodecDecodeError
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 from wire_rpc.errors import (
@@ -23,6 +23,7 @@ from wire_rpc.logger import logger
 from wire_rpc.middleware import Middleware
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
+from wire_rpc.router import Router
 from wire_rpc.transports import Transport
 
 type AppContext = Any
@@ -42,9 +43,8 @@ class App:
         self._codec = codec
         self._ctx: Optional[Any] = None
         self._handlers: dict[str, Handler] = {}
-        self._param_types: dict[str, Any] = {}
-        self._return_types: dict[str, Any] = {}
-        self._has_params: dict[str, bool] = {}
+        self._specs: dict[str, HandlerSpec] = {}
+        self._router_middleware: dict[str, list[Middleware]] = {}
         self._middleware: List[Middleware] = []
         self._on_startup: Optional[StartupHook] = None
         self._on_shutdown: Optional[ShutdownHook] = None
@@ -52,10 +52,9 @@ class App:
     def method(self, name: str) -> Callable:
         def decorator(func: Handler) -> Handler:
             spec = inspect_handler(func, multicast=False)
-            self._param_types[name] = spec.params_type
-            self._return_types[name] = spec.return_type
-            self._has_params[name] = spec.has_params
             self._handlers[name] = func
+            self._specs[name] = spec
+            self._router_middleware[name] = []
             logger.info(
                 f"Registered handler for method '{name}' "
                 f"with parameter type '{spec.params_type}'"
@@ -63,6 +62,17 @@ class App:
             return func
 
         return decorator
+
+    def include_router(self, router: Router) -> None:
+        entries = router._flatten()
+        for name, entry in entries.items():
+            self._handlers[name] = entry.handler
+            self._specs[name] = entry.spec
+            self._router_middleware[name] = entry.middleware
+            logger.info(
+                f"Registered handler for method '{name}' "
+                f"with parameter type '{entry.spec.params_type}'"
+            )
 
     def middleware(self, func: Middleware) -> Middleware:
         self._middleware.append(func)
@@ -92,17 +102,16 @@ class App:
             )
 
         handler = self._handlers[request.method]
-        params_type = self._param_types[request.method]
-        return_type = self._return_types[request.method]
-        has_params = self._has_params[request.method]
+        spec = self._specs[request.method]
+        router_mw = self._router_middleware.get(request.method, [])
 
-        if request.params is not None and params_type is not None and has_params:
+        if request.params is not None and spec.params_type is not None and spec.has_params:
             try:
-                request.params = self._codec.convert(request.params, params_type)
+                request.params = self._codec.convert(request.params, spec.params_type)
             except CodecConversionError:
                 logger.warning(
                     f"Invalid params for request (id={request.id}). "
-                    f"Must be of type {params_type}"
+                    f"Must be of type {spec.params_type}"
                 )
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
@@ -113,17 +122,22 @@ class App:
             req: RawWireRequest,
             ctx: AppContext,
         ) -> WireResponse:
-            if has_params:
+            if spec.has_params:
                 result = await handler(req.params, ctx)
             else:
                 result = await handler(ctx)
 
-            if return_type is not None:
-                result = self._codec.convert(result, return_type)
+            if spec.return_type is not None:
+                result = self._codec.convert(result, spec.return_type)
 
             return WireSuccessResponse(result=result, id=req.id)
 
+        # Build chain: app middleware → router middleware → handler
         chain = call_handler
+
+        for mw in reversed(router_mw):
+            next_fn = chain
+            chain = lambda req, ctx, n=next_fn, m=mw: m(req, ctx, n)  # type: ignore
 
         for mw in reversed(self._middleware):
             next_fn = chain
