@@ -23,7 +23,7 @@ from wire_rpc.middleware import Middleware
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
 from wire_rpc.router import Router
-from wire_rpc.transports.protocol import MulticastTransport
+from wire_rpc.transports.protocol import MulticastTransport, StartupComponent
 
 type AppContext = Any
 type Handler = Callable[..., Awaitable[Any]]
@@ -47,6 +47,14 @@ class MulticastApp:
         self._middleware: List[Middleware] = []
         self._on_startup: Optional[StartupHook] = None
         self._on_shutdown: Optional[ShutdownHook] = None
+
+    async def _internal_startup(self):
+        if isinstance(self._transport, StartupComponent):
+             await self._transport.startup()
+    
+    async def _internal_shutdown(self):
+         if isinstance(self._transport, StartupComponent):
+             await self._transport.shutdown()
 
     @property
     def transport(self) -> MulticastTransport:
@@ -224,13 +232,21 @@ class MulticastApp:
         asyncio.run(self._run())
 
     async def _run(self):
-        if self._on_startup:
-            logger.info("Starting wire_rpc multicast server...")
-            self._ctx = await self._on_startup()
+
+        await self._internal_startup()
 
         try:
-            await self._listen()
+            if self._on_startup:
+                logger.info("Starting wire_rpc multicast server...")
+                self._ctx = await self._on_startup()
+
+            try:
+                await self._listen()
+            finally:
+                if self._on_shutdown:
+                    logger.info("Shutting down multicast server...")
+                    await self._on_shutdown(self._ctx)
+
         finally:
-            if self._on_shutdown:
-                logger.info("Shutting down multicast server...")
-                await self._on_shutdown(self._ctx)
+            
+            await self._internal_shutdown()
