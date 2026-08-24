@@ -44,6 +44,7 @@ class WsServerTransport:
 
         if self._auth:
             app.router.add_post("/login", self._auth.login)
+            app.router.add_post("/logout", self._auth.logout)
 
         if self._static_dir:
             # Serve index.html on /
