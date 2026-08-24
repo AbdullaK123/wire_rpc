@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from wire_rpc._handler import HandlerSpec, inspect_handler
+from wire_rpc._middleware import inspect_middleware
 from wire_rpc.logger import logger
 from wire_rpc.middleware import Middleware
 
@@ -71,6 +72,7 @@ class Router:
 
     def middleware(self, func: Middleware) -> Middleware:
         """Register middleware scoped to this router and its children."""
+        inspect_middleware(func)
         self._middleware.append(func)
         logger.info(
             f"Router '{self.prefix}': registered middleware "

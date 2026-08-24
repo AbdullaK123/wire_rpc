@@ -11,6 +11,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, List, Optional
 
 from wire_rpc._handler import HandlerSpec, inspect_handler
+from wire_rpc._middleware import inspect_middleware
 from wire_rpc.codecs import Codec, CodecConversionError, CodecDecodeError
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 from wire_rpc.errors import (
@@ -75,6 +76,7 @@ class App:
             )
 
     def middleware(self, func: Middleware) -> Middleware:
+        inspect_middleware(func)
         self._middleware.append(func)
         logger.info(
             f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'"
