@@ -39,15 +39,15 @@ class WsServerTransport:
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._connected = asyncio.Event()
 
+    async def startup(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.startup()
+
     async def connect(self):
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
 
         if self._auth:
-
-            if isinstance(self._auth, StartupComponent):
-                await self._auth.startup()
-
             app.router.add_post("/login", self._auth.login)
             app.router.add_post("/logout", self._auth.logout)
 
@@ -91,11 +91,12 @@ class WsServerTransport:
 
         return ws
 
+    async def shutdown(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+              await self._auth.shutdown()
+
     async def close(self):
 
-        if isinstance(self._auth, StartupComponent):
-            await self._auth.shutdown()
-            
         if self._ws:
             await self._ws.close()
             self._ws = None
@@ -143,6 +144,10 @@ class MulticastWsServerTransport:
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         self._auth = auth
 
+    async def startup(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+              await self._auth.startup()
+
     async def connect(self):
         
 
@@ -150,10 +155,6 @@ class MulticastWsServerTransport:
         app.router.add_get("/ws", self._handle_ws)
 
         if self._auth:
-
-            if isinstance(self._auth, StartupComponent):
-                await self._auth.startup()
-
             app.router.add_post("/login", self._auth.login)
             app.router.add_post("/logout", self._auth.logout)
 
@@ -230,10 +231,13 @@ class MulticastWsServerTransport:
         for client_id in dead:
             del self._clients[client_id]
 
-    async def close(self):
+    
 
+    async def shutdown(self):
         if self._auth and isinstance(self._auth, StartupComponent):
-            await self._auth.shutdown()
+              await self._auth.shutdown()
+
+    async def close(self):
 
         for client_id, ws in self._clients.items():
             await ws.close()

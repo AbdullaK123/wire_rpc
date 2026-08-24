@@ -13,6 +13,7 @@ from typing import Self
 import uuid
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports.protocol import StartupComponent
 
 
 class TcpServerTransport:
@@ -30,6 +31,14 @@ class TcpServerTransport:
         self._writer: asyncio.StreamWriter | None = None
         self._server: asyncio.Server | None = None
         self._connected = asyncio.Event()
+
+    async def startup(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.startup()
+    
+    async def shutdown(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
 
     async def connect(self) -> None:
         self._server = await asyncio.start_server(

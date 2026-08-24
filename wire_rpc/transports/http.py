@@ -18,15 +18,19 @@ class HttpServerTransport:
         self._port = port
         self._auth = auth
 
+    async def startup(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.startup()
+
+    async def shutdown(self):
+        if self._auth and isinstance(self._auth, StartupComponent):
+            await self._auth.shutdown()
+
     async def connect(self):
         self._app = web.Application()
         self._app.router.add_post("/rpc", self._handle)
 
         if self._auth:
-
-            if isinstance(self._auth, StartupComponent):
-                await self._auth.startup()
-
             self._app.router.add_post("/login", self._auth.login)
             self._app.router.add_post("/logout", self._auth.logout)
 
