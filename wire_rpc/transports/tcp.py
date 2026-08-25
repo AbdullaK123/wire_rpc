@@ -328,6 +328,7 @@ class TcpMulticastServerTransport:
             logger.warning(f"Read timeout from {client_id}")
         finally:
             self._clients.pop(client_id, None)
+            self._write_locks.pop(client_id, None)
             writer.close()
             await writer.wait_closed()
             logger.info(
@@ -366,7 +367,7 @@ class TcpMulticastServerTransport:
         frame = len(data).to_bytes(4, "big") + data
         dead: list[str] = []
 
-        for client_id, (reader, writer) in self._clients.items():
+        for client_id, (_, writer) in list(self._clients.items()):
             try:
                 async with self._write_locks[client_id]:
                     writer.write(frame)
