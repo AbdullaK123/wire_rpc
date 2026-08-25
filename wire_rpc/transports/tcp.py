@@ -249,11 +249,12 @@ class TcpMulticastServerTransport:
         await writer.drain()
 
     async def broadcast(self, data: bytes) -> None:
+        
+        if len(data) == 0 or len(data) > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
+
         frame = len(data).to_bytes(4, "big") + data
         dead: list[str] = []
-
-        if len(data) == 0 or len(data) >= self._max_frame_size:
-            raise InvalidFrameSizeError(self._max_frame_size)
 
         for client_id, (reader, writer) in self._clients.items():
             try:
