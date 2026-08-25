@@ -67,6 +67,7 @@ class TcpServerTransport:
 
                 if addr is None:
                     writer.close()
+                    await writer.wait_closed()
                     return
                 
             logger.info(f"TCP client connected from {addr}")
@@ -219,6 +220,8 @@ class TcpMulticastServerTransport:
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
+        max_connections: int = 1024,
+        recv_queue_size: int = 1024,
         auth: Authenticator | None = None
     ):
         self._host = host
@@ -227,8 +230,10 @@ class TcpMulticastServerTransport:
         self._read_timeout = read_timeout
         self._auth_timeout = auth_timeout
         self._max_frame_size = max_frame_size
+        self._max_connections = max_connections
+        self._recv_queue_size = recv_queue_size
         self._clients: dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
-        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=self._recv_queue_size)
         self._server: asyncio.Server | None = None
 
     async def startup(self):
@@ -247,6 +252,12 @@ class TcpMulticastServerTransport:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
+        if len(self._clients) >= self._max_connections:
+            logger.warning(f"Max connections already reached. Rejecting connection...")
+            writer.close()
+            await writer.wait_closed()
+            return
+        
         client_id = str(uuid.uuid4())[:8]
         addr = None
 
@@ -277,7 +288,7 @@ class TcpMulticastServerTransport:
                     raise InvalidFrameSizeError(self._max_frame_size)
                 async with asyncio.timeout(self._read_timeout):
                     payload = await reader.readexactly(length)
-                self._recv_queue.put_nowait((client_id, payload))
+                await self._recv_queue.put((client_id, payload))
         except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
             pass
         except InvalidFrameSizeError:
@@ -291,6 +302,7 @@ class TcpMulticastServerTransport:
         finally:
             self._clients.pop(client_id, None)
             writer.close()
+            await writer.wait_closed()
             logger.info(f"Client {client_id} disconnected ({len(self._clients)} total)")
 
     async def close(self) -> None:
