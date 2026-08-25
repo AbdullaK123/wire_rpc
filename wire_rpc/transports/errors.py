@@ -8,3 +8,6 @@ class InvalidFrameSizeError(TransportError):
         super().__init__(
             f"Invalid frame size. Must be less than max frame size of {max_frame_size} bytes"
         )
+
+class IdleTimeoutError(TransportError):
+    pass
