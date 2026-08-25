@@ -164,6 +164,11 @@ class TcpServerTransport:
 
         self._closing = True
 
+        if self._server:
+              self._server.close()
+              await self._server.wait_closed()
+              self._server = None
+
         if self._inflight:
             await asyncio.gather(
                 *self._inflight,
@@ -175,10 +180,7 @@ class TcpServerTransport:
             self._connection = None
             self._connected.clear()
 
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+  
 
     async def recv(self) -> bytes:
 
