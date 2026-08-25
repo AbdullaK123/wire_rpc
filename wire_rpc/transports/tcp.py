@@ -11,7 +11,7 @@ Pure asyncio. Zero dependencies beyond stdlib.
 import asyncio
 from typing import Self
 import uuid
-
+import ssl
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
 from wire_rpc.transports._connection_limiter import (
@@ -75,6 +75,7 @@ class TcpServerTransport:
         auth_timeout: float = 10.0,
         write_timeout: float = 30.0,
         idle_timeout: float | None = 300.0,
+        ssl_context: ssl.SSLContext | None = None,
         auth: Authenticator | None = None,
     ):
         self._host = host
@@ -84,6 +85,7 @@ class TcpServerTransport:
         self._auth_timeout = auth_timeout
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
+        self._ssl = ssl_context
         self._auth: Authenticator | None = auth
         self._connection: TcpConnection | None = None
         self._server: asyncio.Server | None = None
@@ -99,7 +101,10 @@ class TcpServerTransport:
 
     async def connect(self) -> None:
         self._server = await asyncio.start_server(
-            self._handle_client, self._host, self._port
+            self._handle_client, 
+            self._host, 
+            self._port,
+            ssl=self._ssl
         )
         logger.info(f"TCP server listening on {self._host}:{self._port}")
         await self._connected.wait()
@@ -212,6 +217,7 @@ class TcpClientTransport:
         read_timeout: float = 30.0,
         write_timeout: float = 30.0,
         idle_timeout: float | None = 300.0,
+        ssl_context: ssl.SSLContext | None = None
     ):
         self._host = host
         self._port = port
@@ -219,10 +225,15 @@ class TcpClientTransport:
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
+        self._ssl = ssl_context
         self._connection: TcpConnection | None = None
 
     async def connect(self) -> None:
-        reader, writer = await asyncio.open_connection(self._host, self._port)
+        reader, writer = await asyncio.open_connection(
+            self._host, 
+            self._port,
+            ssl=self._ssl
+        )
         self._connection = TcpConnection(reader=reader, writer=writer)
         logger.info(f"Connected to TCP server at {self._host}:{self._port}")
 
@@ -303,6 +314,7 @@ class TcpMulticastServerTransport:
         idle_timeout: float | None = 300.0,
         max_connections: int = 1024,
         recv_queue_size: int = 1024,
+        ssl_context: ssl.SSLContext | None = None,
         auth: Authenticator | None = None,
     ):
         self._host = host
@@ -313,6 +325,7 @@ class TcpMulticastServerTransport:
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
+        self._ssl = ssl_context
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
         self._clients: dict[str, TcpConnection] = {}
@@ -331,7 +344,10 @@ class TcpMulticastServerTransport:
 
     async def connect(self) -> None:
         self._server = await asyncio.start_server(
-            self._handle_client, self._host, self._port
+            self._handle_client, 
+            self._host, 
+            self._port,
+            ssl=self._ssl
         )
         logger.info(
             f"TCP multicast server listening on {self._host}:{self._port}"
