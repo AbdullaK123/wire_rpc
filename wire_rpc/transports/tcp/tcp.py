@@ -107,6 +107,9 @@ async def _drain_tasks(
     _, pending = await asyncio.wait(tracked, timeout=timeout)
 
     if pending:
+        logger.warning(
+            f"Graceful shutdown timed out; cancelling {len(pending)} task(s)"
+        )
         for task in pending:
             task.cancel()
 
@@ -134,10 +137,10 @@ class TcpServerTransport:
         idle_timeout: float | None = 300.0,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
-        shutdown_timeout: float = 30.0,
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         auth: Authenticator | None = None,
+        shutdown_timeout: float = 30.0,
     ):
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
@@ -176,30 +179,28 @@ class TcpServerTransport:
             await self._auth.shutdown()
 
     async def connect(self) -> None:
-        if self._closing:
-            raise ConnectionError("Transport is closing")
+        with _track_operation(self._inflight, self._closing):
+            server = await asyncio.start_server(
+                self._handle_client,
+                self._host,
+                self._port,
+                ssl=self._ssl,
+                ssl_handshake_timeout=self._ssl_handshake_timeout,
+                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
+            )
 
-        server = await asyncio.start_server(
-            self._handle_client,
-            self._host,
-            self._port,
-            ssl=self._ssl,
-            ssl_handshake_timeout=self._ssl_handshake_timeout,
-            ssl_shutdown_timeout=self._ssl_shutdown_timeout,
-        )
+            if self._closing:
+                server.close()
+                await server.wait_closed()
+                raise ConnectionError("Transport is closing")
 
-        if self._closing:
-            server.close()
-            await server.wait_closed()
-            raise ConnectionError("Transport is closing")
+            self._server = server
+            logger.info(f"TCP server listening on {self._host}:{self._port}")
 
-        self._server = server
-        logger.info(f"TCP server listening on {self._host}:{self._port}")
+            await self._connected.wait()
 
-        await self._connected.wait()
-
-        if self._closing:
-            raise ConnectionError("Transport is closing")
+            if self._closing:
+                raise ConnectionError("Transport is closing")
 
     async def _handle_client(
         self,
@@ -252,6 +253,8 @@ class TcpServerTransport:
             await self._server.wait_closed()
             self._server = None
 
+        # Wake connect()/recv() calls waiting for the first connection. They
+        # re-check _closing before doing any more work.
         self._connected.set()
 
         await _drain_tasks(
@@ -352,9 +355,9 @@ class TcpClientTransport:
         idle_timeout: float | None = 300.0,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
-        shutdown_timeout: float = 30.0,
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
+        shutdown_timeout: float = 30.0,
     ):
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
@@ -379,26 +382,24 @@ class TcpClientTransport:
         self._inflight: set[asyncio.Task[object]] = set()
 
     async def connect(self) -> None:
-        if self._closing:
-            raise ConnectionError("Transport is closing")
+        with _track_operation(self._inflight, self._closing):
+            reader, writer = await asyncio.open_connection(
+                self._host,
+                self._port,
+                ssl=self._ssl,
+                ssl_handshake_timeout=self._ssl_handshake_timeout,
+                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
+            )
 
-        reader, writer = await asyncio.open_connection(
-            self._host,
-            self._port,
-            ssl=self._ssl,
-            ssl_handshake_timeout=self._ssl_handshake_timeout,
-            ssl_shutdown_timeout=self._ssl_shutdown_timeout,
-        )
+            if self._closing:
+                await _close_writer(writer)
+                raise ConnectionError("Transport is closing")
 
-        if self._closing:
-            await _close_writer(writer)
-            raise ConnectionError("Transport is closing")
+            if self._keep_alive is not None:
+                configure_keepalive(writer, self._keep_alive)
 
-        if self._keep_alive is not None:
-            configure_keepalive(writer, self._keep_alive)
-
-        self._connection = TcpConnection(reader=reader, writer=writer)
-        logger.info(f"Connected to TCP server at {self._host}:{self._port}")
+            self._connection = TcpConnection(reader=reader, writer=writer)
+            logger.info(f"Connected to TCP server at {self._host}:{self._port}")
 
     async def close(self) -> None:
         self._closing = True
@@ -490,9 +491,9 @@ class TcpMulticastServerTransport:
         ssl_context: ssl.SSLContext | None = None,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
-        shutdown_timeout: float = 30.0,
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         auth: Authenticator | None = None,
+        shutdown_timeout: float = 30.0,
     ):
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
@@ -534,27 +535,25 @@ class TcpMulticastServerTransport:
             await self._auth.shutdown()
 
     async def connect(self) -> None:
-        if self._closing:
-            raise ConnectionError("Transport is closing")
+        with _track_operation(self._inflight, self._closing):
+            server = await asyncio.start_server(
+                self._handle_client,
+                self._host,
+                self._port,
+                ssl=self._ssl,
+                ssl_handshake_timeout=self._ssl_handshake_timeout,
+                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
+            )
 
-        server = await asyncio.start_server(
-            self._handle_client,
-            self._host,
-            self._port,
-            ssl=self._ssl,
-            ssl_handshake_timeout=self._ssl_handshake_timeout,
-            ssl_shutdown_timeout=self._ssl_shutdown_timeout,
-        )
+            if self._closing:
+                server.close()
+                await server.wait_closed()
+                raise ConnectionError("Transport is closing")
 
-        if self._closing:
-            server.close()
-            await server.wait_closed()
-            raise ConnectionError("Transport is closing")
-
-        self._server = server
-        logger.info(
-            f"TCP multicast server listening on {self._host}:{self._port}"
-        )
+            self._server = server
+            logger.info(
+                f"TCP multicast server listening on {self._host}:{self._port}"
+            )
 
     async def _handle_client(
         self,
@@ -593,6 +592,7 @@ class TcpMulticastServerTransport:
         client_id = str(uuid.uuid4())[:8]
         addr = None
         connection = TcpConnection(reader=reader, writer=writer)
+        registered = False
 
         try:
             if self._keep_alive is not None:
@@ -616,6 +616,7 @@ class TcpMulticastServerTransport:
                 return
 
             self._clients[client_id] = connection
+            registered = True
             logger.info(
                 f"Client {client_id} connected from {addr} "
                 f"({len(self._clients)} total)"
@@ -651,15 +652,21 @@ class TcpMulticastServerTransport:
                 f"Client (id={client_id}) reached idle timeout. Disconnecting"
             )
         finally:
-            if self._closing:
-                return
+            if self._closing and registered:
+                # close() owns registered connections during shutdown so an
+                # in-flight send cannot race this reader task closing them.
+                pass
+            else:
+                if registered:
+                    self._clients.pop(client_id, None)
 
-            self._clients.pop(client_id, None)
-            await connection.close()
-            logger.info(
-                f"Client {client_id} disconnected "
-                f"({len(self._clients)} total)"
-            )
+                await connection.close()
+
+                if registered:
+                    logger.info(
+                        f"Client {client_id} disconnected "
+                        f"({len(self._clients)} total)"
+                    )
 
     async def close(self) -> None:
         self._closing = True
