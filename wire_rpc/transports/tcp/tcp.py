@@ -14,13 +14,14 @@ import uuid
 import ssl
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
-from wire_rpc.transports._connection_limiter import (
+from wire_rpc.transports.tcp._connection_limiter import (
     ConnectionLimiter,
     ConnectionLimitExceeded,
 )
-from wire_rpc.transports._tcp_connection import TcpConnection
+from wire_rpc.transports.tcp._tcp_connection import TcpConnection
 from wire_rpc.transports.errors import IdleTimeoutError, InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
+from wire_rpc.transports.tcp.keep_alive import TcpKeepaliveConfig, configure_keepalive
 
 
 async def _read_frame(
@@ -78,6 +79,7 @@ class TcpServerTransport:
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
         ssl_context: ssl.SSLContext | None = None,
+        keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         auth: Authenticator | None = None,
     ):
         self._host = host
@@ -97,6 +99,7 @@ class TcpServerTransport:
         self._auth: Authenticator | None = auth
         self._connection: TcpConnection | None = None
         self._server: asyncio.Server | None = None
+        self._keep_alive = keep_alive
         self._connected = asyncio.Event()
 
     async def startup(self):
@@ -124,6 +127,13 @@ class TcpServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+
+        if self._keep_alive is not None:
+            configure_keepalive(
+                writer,
+                self._keep_alive
+            )
+        
         try:
             addr = None
 
@@ -229,7 +239,8 @@ class TcpClientTransport:
         idle_timeout: float | None = 300.0,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
-        ssl_context: ssl.SSLContext | None = None
+        ssl_context: ssl.SSLContext | None = None,
+        keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig()
     ):
         self._host = host
         self._port = port
@@ -238,6 +249,7 @@ class TcpClientTransport:
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
         self._ssl = ssl_context
+        self._keep_alive = keep_alive
         self._ssl_handshake_timeout = (
             ssl_handshake_timeout if ssl_context is not None else None
         )
@@ -247,6 +259,7 @@ class TcpClientTransport:
         self._connection: TcpConnection | None = None
 
     async def connect(self) -> None:
+
         reader, writer = await asyncio.open_connection(
             self._host, 
             self._port,
@@ -254,6 +267,13 @@ class TcpClientTransport:
             ssl_handshake_timeout=self._ssl_handshake_timeout,
             ssl_shutdown_timeout=self._ssl_shutdown_timeout
         )
+        
+        if self._keep_alive is not None:
+            configure_keepalive(
+                writer,
+                self._keep_alive
+            )
+
         self._connection = TcpConnection(reader=reader, writer=writer)
         logger.info(f"Connected to TCP server at {self._host}:{self._port}")
 
@@ -337,6 +357,7 @@ class TcpMulticastServerTransport:
         ssl_context: ssl.SSLContext | None = None,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
+        keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         auth: Authenticator | None = None
     ):
         self._host = host
@@ -347,6 +368,7 @@ class TcpMulticastServerTransport:
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
+        self._keep_alive = keep_alive
         self._ssl = ssl_context
         self._ssl_handshake_timeout = (
             ssl_handshake_timeout if ssl_context is not None else None
@@ -401,6 +423,14 @@ class TcpMulticastServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+
+        
+        if self._keep_alive is not None:
+            configure_keepalive(
+                writer,
+                self._keep_alive
+            )
+        
         client_id = str(uuid.uuid4())[:8]
         addr = None
         connection = TcpConnection(reader=reader, writer=writer)
@@ -545,8 +575,4 @@ class TcpMulticastServerTransport:
         await self.close()
 
 
-__all__ = [
-    "TcpMulticastServerTransport",
-    "TcpServerTransport",
-    "TcpClientTransport",
-]
+
