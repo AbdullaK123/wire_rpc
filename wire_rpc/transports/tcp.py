@@ -168,7 +168,7 @@ class TcpClientTransport:
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
-        write_timeout: float = 30.0
+        write_timeout: float = 30.0,
     ):
         self._host = host
         self._port = port
@@ -432,3 +432,10 @@ class TcpMulticastServerTransport:
         exc_tb: object,
     ) -> None:
         await self.close()
+
+
+__all__ = [
+    "TcpMulticastServerTransport",
+    "TcpServerTransport",
+    "TcpClientTransport",
+]
