@@ -24,11 +24,15 @@ class TcpServerTransport:
         host: str = "0.0.0.0", 
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
+        read_timeout: float = 30.0,
+        auth_timeout: float = 10.0,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
         self._max_frame_size = max_frame_size
+        self._read_timeout = read_timeout
+        self._auth_timeout = auth_timeout
         self._auth: Authenticator | None = auth
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -52,18 +56,28 @@ class TcpServerTransport:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
-        addr = None
+        try: 
 
-        if self._auth:
-            addr = await self._auth.verify((reader, writer))
-            if addr is None:
-                writer.close()
-                return
-            
-        logger.info(f"TCP client connected from {addr}")
-        self._reader = reader
-        self._writer = writer
-        self._connected.set()
+            addr = None
+
+            if self._auth:
+
+                async with asyncio.timeout(self._auth_timeout):
+                    addr = await self._auth.verify((reader, writer))
+
+                if addr is None:
+                    writer.close()
+                    return
+                
+            logger.info(f"TCP client connected from {addr}")
+            self._reader = reader
+            self._writer = writer
+            self._connected.set()
+
+        except asyncio.TimeoutError:
+            logger.error("Client could not authenticate in time. Closing connection...")
+            await self.close()
+
 
     async def close(self) -> None:
         if self._writer:
@@ -77,14 +91,29 @@ class TcpServerTransport:
             self._server = None
 
     async def recv(self) -> bytes:
+
         await self._connected.wait()
-        if self._reader is None:
-            raise ConnectionError("No client connected")
-        length_bytes = await self._reader.readexactly(4)
-        length = int.from_bytes(length_bytes, "big")
-        if length == 0 or length > self._max_frame_size:
-            raise InvalidFrameSizeError(self._max_frame_size)
-        return await self._reader.readexactly(length)
+
+        try:
+            if self._reader is None:
+                raise ConnectionError("No client connected")
+            
+            async with asyncio.timeout(self._read_timeout):
+                length_bytes = await self._reader.readexactly(4)
+
+            length = int.from_bytes(length_bytes, "big")
+
+            if length == 0 or length > self._max_frame_size:
+                raise InvalidFrameSizeError(self._max_frame_size)
+
+            async with asyncio.timeout(self._read_timeout):
+                payload = await self._reader.readexactly(length)
+
+            return payload
+        except asyncio.TimeoutError:
+            logger.error("Could not read payload in time. Closing connection...")
+            await self.close()
+            raise
 
     async def send(self, data: bytes) -> None:
         if self._writer is None:
@@ -115,9 +144,11 @@ class TcpClientTransport:
         host: str = "localhost", 
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
+        read_timeout: float = 30.0
     ):
         self._host = host
         self._port = port
+        self._read_timeout = read_timeout
         self._max_frame_size = max_frame_size
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -136,13 +167,21 @@ class TcpClientTransport:
             self._reader = None
 
     async def recv(self) -> bytes:
-        if self._reader is None:
-            raise ConnectionError("Not connected")
-        length_bytes = await self._reader.readexactly(4)
-        length = int.from_bytes(length_bytes, "big")
-        if length == 0 or length > self._max_frame_size:
-            raise InvalidFrameSizeError(self._max_frame_size)
-        return await self._reader.readexactly(length)
+        try:
+            if self._reader is None:
+                raise ConnectionError("Not connected")
+            async with asyncio.timeout(self._read_timeout):
+                length_bytes = await self._reader.readexactly(4)
+            length = int.from_bytes(length_bytes, "big")
+            if length == 0 or length > self._max_frame_size:
+                raise InvalidFrameSizeError(self._max_frame_size)
+            async with asyncio.timeout(self._read_timeout):
+                payload = await self._reader.readexactly(length)
+            return payload
+        except asyncio.TimeoutError:
+            logger.error("Could not read payload in time. Closing connection...")
+            await self.close()
+            raise
 
     async def send(self, data: bytes) -> None:
         if self._writer is None:
@@ -172,11 +211,15 @@ class TcpMulticastServerTransport:
         host: str = "0.0.0.0", 
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
+        read_timeout: float = 30.0,
+        auth_timeout: float = 10.0,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
         self._auth = auth
+        self._read_timeout = read_timeout
+        self._auth_timeout = auth_timeout
         self._max_frame_size = max_frame_size
         self._clients: dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
@@ -202,7 +245,8 @@ class TcpMulticastServerTransport:
         addr = None
 
         if self._auth:
-            addr = await self._auth.verify((reader, writer))
+            async with asyncio.timeout(self._auth_timeout):
+                addr = await self._auth.verify((reader, writer))
             if addr is None:
                 writer.close()
                 return 
@@ -212,14 +256,24 @@ class TcpMulticastServerTransport:
 
         try:
             while True:
-                length_bytes = await reader.readexactly(4)
+                async with asyncio.timeout(self._read_timeout):
+                    length_bytes = await reader.readexactly(4)
                 length = int.from_bytes(length_bytes, "big")
                 if length == 0 or length > self._max_frame_size:
                     raise InvalidFrameSizeError(self._max_frame_size)
-                payload = await reader.readexactly(length)
+                async with asyncio.timeout(self._read_timeout):
+                    payload = await reader.readexactly(length)
                 self._recv_queue.put_nowait((client_id, payload))
         except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
             pass
+        except InvalidFrameSizeError:
+            logger.warning(
+                f"Client {client_id} sent an invalid frame size"
+            )
+        except asyncio.TimeoutError:
+            logger.error("Read timeout. Closing connection...")
+            await self.close()
+            raise
         finally:
             self._clients.pop(client_id, None)
             writer.close()
