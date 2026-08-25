@@ -32,6 +32,7 @@ class TcpServerTransport:
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
+        write_timeout: float = 30.0,
         auth: Authenticator | None = None,
     ):
         self._host = host
@@ -39,6 +40,7 @@ class TcpServerTransport:
         self._max_frame_size = max_frame_size
         self._read_timeout = read_timeout
         self._auth_timeout = auth_timeout
+        self._writer_timeout = write_timeout
         self._auth: Authenticator | None = auth
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -131,10 +133,19 @@ class TcpServerTransport:
             raise ConnectionError("No client connected")
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
-        async with self._writer_lock:
-            self._writer.write(len(data).to_bytes(4, "big"))
-            self._writer.write(data)
-            await self._writer.drain()
+
+        try:
+            async with self._writer_lock:
+                self._writer.write(len(data).to_bytes(4, "big"))
+                self._writer.write(data)
+                async with asyncio.timeout(self._writer_timeout):
+                    await self._writer.drain()
+        except asyncio.TimeoutError:
+            logger.error("Write timeout")
+            if self._writer:
+                self._writer.close()
+                await self._writer.wait_closed()
+            raise
 
     async def __aenter__(self) -> Self:
         self._connect_task = asyncio.create_task(self.connect())
@@ -157,10 +168,12 @@ class TcpClientTransport:
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
+        write_timeout: float = 30.0
     ):
         self._host = host
         self._port = port
         self._read_timeout = read_timeout
+        self._write_timeout = write_timeout
         self._max_frame_size = max_frame_size
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -203,10 +216,18 @@ class TcpClientTransport:
             raise ConnectionError("Not connected")
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
-        async with self._writer_lock:
-            self._writer.write(len(data).to_bytes(4, "big"))
-            self._writer.write(data)
-            await self._writer.drain()
+        try:
+            async with self._writer_lock:
+                self._writer.write(len(data).to_bytes(4, "big"))
+                self._writer.write(data)
+                async with asyncio.timeout(self._write_timeout):
+                    await self._writer.drain()
+        except asyncio.TimeoutError:
+            logger.error("Write timeout")
+            if self._writer:
+                self._writer.close()
+                await self._writer.wait_closed()
+            raise
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -230,6 +251,7 @@ class TcpMulticastServerTransport:
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
+        write_timeout: float = 30.0,
         max_connections: int = 1024,
         recv_queue_size: int = 1024,
         auth: Authenticator | None = None,
@@ -239,6 +261,7 @@ class TcpMulticastServerTransport:
         self._auth = auth
         self._read_timeout = read_timeout
         self._auth_timeout = auth_timeout
+        self._write_timeout = write_timeout
         self._max_frame_size = max_frame_size
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
@@ -358,10 +381,22 @@ class TcpMulticastServerTransport:
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
 
-        async with connection.write_lock:
-            connection.writer.write(len(data).to_bytes(4, "big"))
-            connection.writer.write(data)
-            await connection.writer.drain()
+        try:
+            async with connection.write_lock:
+                connection.writer.write(len(data).to_bytes(4, "big"))
+                connection.writer.write(data)
+                async with asyncio.timeout(self._write_timeout):
+                    await connection.writer.drain()
+        except asyncio.TimeoutError:
+            logger.error(f"Client (id={client_id}) timed out on write. Disconnecting...")
+            self._clients.pop(client_id, None)
+            connection.writer.close()
+            await connection.writer.wait_closed()
+            logger.info(
+                f"Client {client_id} disconnected "
+                f"({len(self._clients)} total)"
+            )
+            
 
     async def broadcast(self, data: bytes) -> None:
         if len(data) == 0 or len(data) > self._max_frame_size:
