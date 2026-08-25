@@ -18,6 +18,7 @@ from wire_rpc.transports._connection_limiter import (
     ConnectionLimiter,
     ConnectionLimitExceeded,
 )
+from wire_rpc.transports._tcp_connection import TcpConnection
 from wire_rpc.transports.errors import InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
 
@@ -239,11 +240,7 @@ class TcpMulticastServerTransport:
         self._max_frame_size = max_frame_size
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
-        self._write_locks: dict[str, asyncio.Lock] = {}
-        self._clients: dict[
-            str,
-            tuple[asyncio.StreamReader, asyncio.StreamWriter],
-        ] = {}
+        self._clients: dict[str, TcpConnection] = {}
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(
             maxsize=self._recv_queue_size
         )
@@ -285,6 +282,7 @@ class TcpMulticastServerTransport:
     ) -> None:
         client_id = str(uuid.uuid4())[:8]
         addr = None
+        connection = TcpConnection(reader=reader, writer=writer)
 
         try:
             if self._auth:
@@ -298,8 +296,7 @@ class TcpMulticastServerTransport:
                 if addr is None:
                     return
 
-            self._clients[client_id] = (reader, writer)
-            self._write_locks[client_id] = asyncio.Lock()
+            self._clients[client_id] = connection
             logger.info(
                 f"Client {client_id} connected from {addr} "
                 f"({len(self._clients)} total)"
@@ -307,14 +304,14 @@ class TcpMulticastServerTransport:
 
             while True:
                 async with asyncio.timeout(self._read_timeout):
-                    length_bytes = await reader.readexactly(4)
+                    length_bytes = await connection.reader.readexactly(4)
 
                 length = int.from_bytes(length_bytes, "big")
                 if length == 0 or length > self._max_frame_size:
                     raise InvalidFrameSizeError(self._max_frame_size)
 
                 async with asyncio.timeout(self._read_timeout):
-                    payload = await reader.readexactly(length)
+                    payload = await connection.reader.readexactly(length)
 
                 await self._recv_queue.put((client_id, payload))
 
@@ -328,18 +325,22 @@ class TcpMulticastServerTransport:
             logger.warning(f"Read timeout from {client_id}")
         finally:
             self._clients.pop(client_id, None)
-            self._write_locks.pop(client_id, None)
-            writer.close()
-            await writer.wait_closed()
+            connection.writer.close()
+            await connection.writer.wait_closed()
             logger.info(
                 f"Client {client_id} disconnected "
                 f"({len(self._clients)} total)"
             )
 
     async def close(self) -> None:
-        for client_id, (reader, writer) in list(self._clients.items()):
-            writer.close()
+        connections = list(self._clients.values())
         self._clients.clear()
+
+        for connection in connections:
+            connection.writer.close()
+        for connection in connections:
+            await connection.writer.wait_closed()
+
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -349,16 +350,16 @@ class TcpMulticastServerTransport:
         return await self._recv_queue.get()
 
     async def send(self, client_id: str, data: bytes) -> None:
-        pair = self._clients.get(client_id)
-        if pair is None:
+        connection = self._clients.get(client_id)
+        if connection is None:
             raise ConnectionError(f"Client {client_id} not connected")
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
-        reader, writer = pair
-        async with self._write_locks[client_id]:
-            writer.write(len(data).to_bytes(4, "big"))
-            writer.write(data)
-            await writer.drain()
+
+        async with connection.write_lock:
+            connection.writer.write(len(data).to_bytes(4, "big"))
+            connection.writer.write(data)
+            await connection.writer.drain()
 
     async def broadcast(self, data: bytes) -> None:
         if len(data) == 0 or len(data) > self._max_frame_size:
@@ -367,15 +368,16 @@ class TcpMulticastServerTransport:
         frame = len(data).to_bytes(4, "big") + data
         dead: list[str] = []
 
-        for client_id, (_, writer) in list(self._clients.items()):
+        for client_id, connection in list(self._clients.items()):
             try:
-                async with self._write_locks[client_id]:
-                    writer.write(frame)
-                    await writer.drain()
+                async with connection.write_lock:
+                    connection.writer.write(frame)
+                    await connection.writer.drain()
             except (ConnectionError, ConnectionResetError):
                 dead.append(client_id)
+
         for client_id in dead:
-            del self._clients[client_id]
+            self._clients.pop(client_id, None)
 
     async def __aenter__(self) -> Self:
         await self.connect()
