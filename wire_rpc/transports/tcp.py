@@ -251,12 +251,20 @@ class TcpMulticastServerTransport:
         addr = None
 
         if self._auth:
-            async with asyncio.timeout(self._auth_timeout):
-                addr = await self._auth.verify((reader, writer))
+            try:
+                async with asyncio.timeout(self._auth_timeout):
+                    addr = await self._auth.verify((reader, writer))
+            except asyncio.TimeoutError:
+                logger.warning("Authentication timeout")
+                writer.close()
+                await writer.wait_closed()
+                return
+
             if addr is None:
                 writer.close()
-                return 
-            
+                await writer.wait_closed()
+                return
+                    
         self._clients[client_id] = (reader, writer)
         logger.info(f"Client {client_id} connected from {addr} ({len(self._clients)} total)")
 
