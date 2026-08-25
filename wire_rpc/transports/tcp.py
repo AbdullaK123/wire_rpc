@@ -388,7 +388,9 @@ class TcpMulticastServerTransport:
                 async with asyncio.timeout(self._write_timeout):
                     await connection.writer.drain()
         except asyncio.TimeoutError:
-            logger.error(f"Client (id={client_id}) timed out on write. Disconnecting...")
+            logger.error(
+                f"Client (id={client_id}) timed out on write. Disconnecting..."
+            )
             self._clients.pop(client_id, None)
             connection.writer.close()
             await connection.writer.wait_closed()
@@ -396,25 +398,28 @@ class TcpMulticastServerTransport:
                 f"Client {client_id} disconnected "
                 f"({len(self._clients)} total)"
             )
-            
+            raise
 
     async def broadcast(self, data: bytes) -> None:
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
 
         frame = len(data).to_bytes(4, "big") + data
-        dead: list[str] = []
+        dead: list[tuple[str, TcpConnection]] = []
 
         for client_id, connection in list(self._clients.items()):
             try:
                 async with connection.write_lock:
                     connection.writer.write(frame)
-                    await connection.writer.drain()
-            except (ConnectionError, ConnectionResetError):
-                dead.append(client_id)
+                    async with asyncio.timeout(self._write_timeout):
+                        await connection.writer.drain()
+            except (asyncio.TimeoutError, ConnectionError, ConnectionResetError):
+                dead.append((client_id, connection))
 
-        for client_id in dead:
+        for client_id, connection in dead:
             self._clients.pop(client_id, None)
+            connection.writer.close()
+            await connection.writer.wait_closed()
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -427,10 +432,3 @@ class TcpMulticastServerTransport:
         exc_tb: object,
     ) -> None:
         await self.close()
-
-
-__all__ = [
-    "TcpMulticastServerTransport",
-    "TcpServerTransport",
-    "TcpClientTransport",
-]
