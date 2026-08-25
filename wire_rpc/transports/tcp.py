@@ -43,6 +43,7 @@ class TcpServerTransport:
         self._writer: asyncio.StreamWriter | None = None
         self._server: asyncio.Server | None = None
         self._connected = asyncio.Event()
+        self._writer_lock = asyncio.Lock()
 
     async def startup(self):
         if self._auth and isinstance(self._auth, StartupComponent):
@@ -129,9 +130,10 @@ class TcpServerTransport:
             raise ConnectionError("No client connected")
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
-        self._writer.write(len(data).to_bytes(4, "big"))
-        self._writer.write(data)
-        await self._writer.drain()
+        async with self._writer_lock:
+            self._writer.write(len(data).to_bytes(4, "big"))
+            self._writer.write(data)
+            await self._writer.drain()
 
     async def __aenter__(self) -> Self:
         self._connect_task = asyncio.create_task(self.connect())
@@ -237,6 +239,7 @@ class TcpMulticastServerTransport:
         self._max_frame_size = max_frame_size
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
+        self._write_locks: dict[str, asyncio.Lock] = {}
         self._clients: dict[
             str,
             tuple[asyncio.StreamReader, asyncio.StreamWriter],
@@ -296,6 +299,7 @@ class TcpMulticastServerTransport:
                     return
 
             self._clients[client_id] = (reader, writer)
+            self._write_locks[client_id] = asyncio.Lock()
             logger.info(
                 f"Client {client_id} connected from {addr} "
                 f"({len(self._clients)} total)"
@@ -350,9 +354,10 @@ class TcpMulticastServerTransport:
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
         reader, writer = pair
-        writer.write(len(data).to_bytes(4, "big"))
-        writer.write(data)
-        await writer.drain()
+        async with self._write_locks[client_id]:
+            writer.write(len(data).to_bytes(4, "big"))
+            writer.write(data)
+            await writer.drain()
 
     async def broadcast(self, data: bytes) -> None:
         if len(data) == 0 or len(data) > self._max_frame_size:
@@ -363,8 +368,9 @@ class TcpMulticastServerTransport:
 
         for client_id, (reader, writer) in self._clients.items():
             try:
-                writer.write(frame)
-                await writer.drain()
+                async with self._write_locks[client_id]:
+                    writer.write(frame)
+                    await writer.drain()
             except (ConnectionError, ConnectionResetError):
                 dead.append(client_id)
         for client_id in dead:
