@@ -101,6 +101,8 @@ class TcpServerTransport:
         self._server: asyncio.Server | None = None
         self._keep_alive = keep_alive
         self._connected = asyncio.Event()
+        self._closing = False
+        self._inflight: set[asyncio.Task[object]] = set()
 
     async def startup(self):
         if self._auth and isinstance(self._auth, StartupComponent):
@@ -127,6 +129,9 @@ class TcpServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+
+        if self._closing:
+            raise ConnectionError("Transport is closing")
 
         if self._keep_alive is not None:
             configure_keepalive(
@@ -156,6 +161,15 @@ class TcpServerTransport:
             await writer.wait_closed()
 
     async def close(self) -> None:
+
+        self._closing = True
+
+        if self._inflight:
+            await asyncio.gather(
+                *self._inflight,
+                return_exceptions=True,
+            )
+
         if self._connection:
             await self._connection.close()
             self._connection = None
@@ -167,11 +181,21 @@ class TcpServerTransport:
             self._server = None
 
     async def recv(self) -> bytes:
+
+        if self._closing:
+            raise ConnectionError("Transport is closing")
+
         await self._connected.wait()
 
         connection = self._connection
+
         if connection is None:
             raise ConnectionError("No client connected")
+
+        task = asyncio.current_task()
+
+        if task is not None:
+            self._inflight.add(task)
 
         try:
             return await _read_frame(
@@ -188,13 +212,27 @@ class TcpServerTransport:
             logger.error("Read timeout")
             await connection.close()
             raise
+        finally:
+            if task is not None:
+                self._inflight.discard(task)
 
     async def send(self, data: bytes) -> None:
+
+        if self._closing:
+            raise ConnectionError("Transport is closing")
+
         connection = self._connection
+
         if connection is None:
             raise ConnectionError("No client connected")
+        
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
+
+        task = asyncio.current_task()
+
+        if task is not None:
+            self._inflight.add(task)
 
         try:
             _ensure_not_idle(connection, self._idle_timeout)
@@ -213,6 +251,9 @@ class TcpServerTransport:
             logger.error("Write timeout")
             await connection.close()
             raise
+        finally:
+            if task is not None:
+                self._inflight.discard(task)
 
     async def __aenter__(self) -> Self:
         self._connect_task = asyncio.create_task(self.connect())
