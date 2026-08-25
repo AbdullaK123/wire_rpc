@@ -82,13 +82,15 @@ class TcpServerTransport:
             raise ConnectionError("No client connected")
         length_bytes = await self._reader.readexactly(4)
         length = int.from_bytes(length_bytes, "big")
-        if length > self._max_frame_size:
+        if length == 0 or length > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
         return await self._reader.readexactly(length)
 
     async def send(self, data: bytes) -> None:
         if self._writer is None:
             raise ConnectionError("No client connected")
+        if len(data) == 0 or len(data) > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
         self._writer.write(len(data).to_bytes(4, "big"))
         self._writer.write(data)
         await self._writer.drain()
@@ -138,13 +140,15 @@ class TcpClientTransport:
             raise ConnectionError("Not connected")
         length_bytes = await self._reader.readexactly(4)
         length = int.from_bytes(length_bytes, "big")
-        if length > self._max_frame_size:
+        if length == 0 or length > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
         return await self._reader.readexactly(length)
 
     async def send(self, data: bytes) -> None:
         if self._writer is None:
             raise ConnectionError("Not connected")
+        if len(data) == 0 or len(data) > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
         self._writer.write(len(data).to_bytes(4, "big"))
         self._writer.write(data)
         await self._writer.drain()
@@ -210,7 +214,7 @@ class TcpMulticastServerTransport:
             while True:
                 length_bytes = await reader.readexactly(4)
                 length = int.from_bytes(length_bytes, "big")
-                if length > self._max_frame_size:
+                if length == 0 or length > self._max_frame_size:
                     raise InvalidFrameSizeError(self._max_frame_size)
                 payload = await reader.readexactly(length)
                 self._recv_queue.put_nowait((client_id, payload))
@@ -237,6 +241,8 @@ class TcpMulticastServerTransport:
         pair = self._clients.get(client_id)
         if pair is None:
             raise ConnectionError(f"Client {client_id} not connected")
+        if len(data) == 0 or len(data) > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
         reader, writer = pair
         writer.write(len(data).to_bytes(4, "big"))
         writer.write(data)
@@ -245,6 +251,10 @@ class TcpMulticastServerTransport:
     async def broadcast(self, data: bytes) -> None:
         frame = len(data).to_bytes(4, "big") + data
         dead: list[str] = []
+
+        if len(data) == 0 or len(data) >= self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
+
         for client_id, (reader, writer) in self._clients.items():
             try:
                 writer.write(frame)
