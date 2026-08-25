@@ -252,12 +252,7 @@ class TcpMulticastServerTransport:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
-        if len(self._clients) >= self._max_connections:
-            logger.warning(f"Max connections already reached. Rejecting connection...")
-            writer.close()
-            await writer.wait_closed()
-            return
-        
+       
         client_id = str(uuid.uuid4())[:8]
         addr = None
 
@@ -277,6 +272,14 @@ class TcpMulticastServerTransport:
                 return
                     
         self._clients[client_id] = (reader, writer)
+
+        if len(self._clients) >= self._max_connections:
+            logger.warning(f"Max connections already reached. Rejecting connection...")
+            writer.close()
+            await writer.wait_closed()
+            return
+                
+
         logger.info(f"Client {client_id} connected from {addr} ({len(self._clients)} total)")
 
         try:
