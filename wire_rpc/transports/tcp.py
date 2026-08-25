@@ -11,8 +11,13 @@ Pure asyncio. Zero dependencies beyond stdlib.
 import asyncio
 from typing import Self
 import uuid
+
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports._connection_limiter import (
+    ConnectionLimiter,
+    ConnectionLimitExceeded,
+)
 from wire_rpc.transports.errors import InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
 
@@ -20,13 +25,13 @@ from wire_rpc.transports.protocol import StartupComponent
 class TcpServerTransport:
 
     def __init__(
-        self, 
-        host: str = "0.0.0.0", 
+        self,
+        host: str = "0.0.0.0",
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
-        auth: Authenticator | None = None
+        auth: Authenticator | None = None,
     ):
         self._host = host
         self._port = port
@@ -42,7 +47,7 @@ class TcpServerTransport:
     async def startup(self):
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
-    
+
     async def shutdown(self):
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
@@ -54,14 +59,15 @@ class TcpServerTransport:
         logger.info(f"TCP server listening on {self._host}:{self._port}")
         await self._connected.wait()
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-
-        try: 
-
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ):
+        try:
             addr = None
 
             if self._auth:
-
                 async with asyncio.timeout(self._auth_timeout):
                     addr = await self._auth.verify((reader, writer))
 
@@ -69,7 +75,7 @@ class TcpServerTransport:
                     writer.close()
                     await writer.wait_closed()
                     return
-                
+
             logger.info(f"TCP client connected from {addr}")
             self._reader = reader
             self._writer = writer
@@ -80,7 +86,6 @@ class TcpServerTransport:
             writer.close()
             await writer.wait_closed()
             return
-
 
     async def close(self) -> None:
         if self._writer:
@@ -94,13 +99,12 @@ class TcpServerTransport:
             self._server = None
 
     async def recv(self) -> bytes:
-
         await self._connected.wait()
 
         try:
             if self._reader is None:
                 raise ConnectionError("No client connected")
-            
+
             async with asyncio.timeout(self._read_timeout):
                 length_bytes = await self._reader.readexactly(4)
 
@@ -145,11 +149,11 @@ class TcpServerTransport:
 class TcpClientTransport:
 
     def __init__(
-        self, 
-        host: str = "localhost", 
+        self,
+        host: str = "localhost",
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
-        read_timeout: float = 30.0
+        read_timeout: float = 30.0,
     ):
         self._host = host
         self._port = port
@@ -211,18 +215,19 @@ class TcpClientTransport:
     ) -> None:
         await self.close()
 
+
 class TcpMulticastServerTransport:
 
     def __init__(
-        self, 
-        host: str = "0.0.0.0", 
+        self,
+        host: str = "0.0.0.0",
         port: int = 9000,
         max_frame_size: int = 16 * 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
         max_connections: int = 1024,
         recv_queue_size: int = 1024,
-        auth: Authenticator | None = None
+        auth: Authenticator | None = None,
     ):
         self._host = host
         self._port = port
@@ -230,16 +235,21 @@ class TcpMulticastServerTransport:
         self._read_timeout = read_timeout
         self._auth_timeout = auth_timeout
         self._max_frame_size = max_frame_size
-        self._max_connections = max_connections
+        self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
-        self._clients: dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
-        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=self._recv_queue_size)
+        self._clients: dict[
+            str,
+            tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        ] = {}
+        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(
+            maxsize=self._recv_queue_size
+        )
         self._server: asyncio.Server | None = None
 
     async def startup(self):
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
-        
+
     async def shutdown(self):
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
@@ -248,50 +258,62 @@ class TcpMulticastServerTransport:
         self._server = await asyncio.start_server(
             self._handle_client, self._host, self._port
         )
-        logger.info(f"TCP multicast server listening on {self._host}:{self._port}")
+        logger.info(
+            f"TCP multicast server listening on {self._host}:{self._port}"
+        )
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        try:
+            async with self._connection_limiter.slot():
+                await self._serve_client(reader, writer)
+        except ConnectionLimitExceeded:
+            logger.warning("Max connections reached. Rejecting connection...")
+            writer.close()
+            await writer.wait_closed()
 
-       
+    async def _serve_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
         client_id = str(uuid.uuid4())[:8]
         addr = None
 
-        if self._auth:
-            try:
-                async with asyncio.timeout(self._auth_timeout):
-                    addr = await self._auth.verify((reader, writer))
-            except asyncio.TimeoutError:
-                logger.warning("Authentication timeout")
-                writer.close()
-                await writer.wait_closed()
-                return
-
-            if addr is None:
-                writer.close()
-                await writer.wait_closed()
-                return
-                    
-        self._clients[client_id] = (reader, writer)
-
-        if len(self._clients) >= self._max_connections:
-            logger.warning(f"Max connections already reached. Rejecting connection...")
-            writer.close()
-            await writer.wait_closed()
-            return
-                
-
-        logger.info(f"Client {client_id} connected from {addr} ({len(self._clients)} total)")
-
         try:
+            if self._auth:
+                try:
+                    async with asyncio.timeout(self._auth_timeout):
+                        addr = await self._auth.verify((reader, writer))
+                except asyncio.TimeoutError:
+                    logger.warning("Authentication timeout")
+                    return
+
+                if addr is None:
+                    return
+
+            self._clients[client_id] = (reader, writer)
+            logger.info(
+                f"Client {client_id} connected from {addr} "
+                f"({len(self._clients)} total)"
+            )
+
             while True:
                 async with asyncio.timeout(self._read_timeout):
                     length_bytes = await reader.readexactly(4)
+
                 length = int.from_bytes(length_bytes, "big")
                 if length == 0 or length > self._max_frame_size:
                     raise InvalidFrameSizeError(self._max_frame_size)
+
                 async with asyncio.timeout(self._read_timeout):
                     payload = await reader.readexactly(length)
+
                 await self._recv_queue.put((client_id, payload))
+
         except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
             pass
         except InvalidFrameSizeError:
@@ -299,14 +321,15 @@ class TcpMulticastServerTransport:
                 f"Client {client_id} sent an invalid frame size"
             )
         except asyncio.TimeoutError:
-             logger.warning(
-                f"Read timeout from {client_id}"
-            )
+            logger.warning(f"Read timeout from {client_id}")
         finally:
             self._clients.pop(client_id, None)
             writer.close()
             await writer.wait_closed()
-            logger.info(f"Client {client_id} disconnected ({len(self._clients)} total)")
+            logger.info(
+                f"Client {client_id} disconnected "
+                f"({len(self._clients)} total)"
+            )
 
     async def close(self) -> None:
         for client_id, (reader, writer) in list(self._clients.items()):
@@ -332,7 +355,6 @@ class TcpMulticastServerTransport:
         await writer.drain()
 
     async def broadcast(self, data: bytes) -> None:
-        
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
 
@@ -360,8 +382,9 @@ class TcpMulticastServerTransport:
     ) -> None:
         await self.close()
 
-__all__ =  [
+
+__all__ = [
     "TcpMulticastServerTransport",
     "TcpServerTransport",
-    "TcpClientTransport"
+    "TcpClientTransport",
 ]
