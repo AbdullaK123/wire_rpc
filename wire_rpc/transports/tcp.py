@@ -285,11 +285,9 @@ class TcpMulticastServerTransport:
                 f"Client {client_id} sent an invalid frame size"
             )
         except asyncio.TimeoutError:
-            logger.error(f"Read timeout from {client_id}. Closing connection...")
-            _, writer = self._clients.pop(client_id)
-            writer.close()
-            await writer.wait_closed()
-            raise
+             logger.warning(
+                f"Read timeout from {client_id}"
+            )
         finally:
             self._clients.pop(client_id, None)
             writer.close()
