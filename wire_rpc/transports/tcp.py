@@ -75,8 +75,10 @@ class TcpServerTransport:
             self._connected.set()
 
         except asyncio.TimeoutError:
-            logger.error("Client could not authenticate in time. Closing connection...")
-            await self.close()
+            logger.warning("Authentication timeout")
+            writer.close()
+            await writer.wait_closed()
+            return
 
 
     async def close(self) -> None:
@@ -111,8 +113,10 @@ class TcpServerTransport:
 
             return payload
         except asyncio.TimeoutError:
-            logger.error("Could not read payload in time. Closing connection...")
-            await self.close()
+            logger.error("Read timeout")
+            if self._writer:
+                self._writer.close()
+                await self._writer.wait_closed()
             raise
 
     async def send(self, data: bytes) -> None:
@@ -179,8 +183,10 @@ class TcpClientTransport:
                 payload = await self._reader.readexactly(length)
             return payload
         except asyncio.TimeoutError:
-            logger.error("Could not read payload in time. Closing connection...")
-            await self.close()
+            logger.error("Read timeout")
+            if self._writer:
+                self._writer.close()
+                await self._writer.wait_closed()
             raise
 
     async def send(self, data: bytes) -> None:
@@ -271,8 +277,10 @@ class TcpMulticastServerTransport:
                 f"Client {client_id} sent an invalid frame size"
             )
         except asyncio.TimeoutError:
-            logger.error("Read timeout. Closing connection...")
-            await self.close()
+            logger.error(f"Read timeout from {client_id}. Closing connection...")
+            _, writer = self._clients.pop(client_id)
+            writer.close()
+            await writer.wait_closed()
             raise
         finally:
             self._clients.pop(client_id, None)
