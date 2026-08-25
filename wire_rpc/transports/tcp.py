@@ -87,8 +87,12 @@ class TcpServerTransport:
         self._auth_timeout = auth_timeout
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
-        self._ssl_handshake_timeout = ssl_handshake_timeout
-        self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._ssl_handshake_timeout = (
+            ssl_handshake_timeout if ssl_context is not None else None
+        )
+        self._ssl_shutdown_timeout = (
+            ssl_shutdown_timeout if ssl_context is not None else None
+        )
         self._ssl = ssl_context
         self._auth: Authenticator | None = auth
         self._connection: TcpConnection | None = None
@@ -234,8 +238,12 @@ class TcpClientTransport:
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
         self._ssl = ssl_context
-        self._ssl_handshake_timeout = ssl_handshake_timeout
-        self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._ssl_handshake_timeout = (
+            ssl_handshake_timeout if ssl_context is not None else None
+        )
+        self._ssl_shutdown_timeout = (
+            ssl_shutdown_timeout if ssl_context is not None else None
+        )
         self._connection: TcpConnection | None = None
 
     async def connect(self) -> None:
@@ -340,8 +348,12 @@ class TcpMulticastServerTransport:
         self._idle_timeout = idle_timeout
         self._max_frame_size = max_frame_size
         self._ssl = ssl_context
-        self._ssl_handshake_timeout = ssl_handshake_timeout
-        self._ssl_shutdown_timeout = ssl_shutdown_timeout
+        self._ssl_handshake_timeout = (
+            ssl_handshake_timeout if ssl_context is not None else None
+        )
+        self._ssl_shutdown_timeout = (
+            ssl_shutdown_timeout if ssl_context is not None else None
+        )
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._recv_queue_size = recv_queue_size
         self._clients: dict[str, TcpConnection] = {}
