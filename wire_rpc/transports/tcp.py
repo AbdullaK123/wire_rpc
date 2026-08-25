@@ -13,6 +13,7 @@ from typing import Self
 import uuid
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports.errors import InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
 
 
@@ -22,10 +23,12 @@ class TcpServerTransport:
         self, 
         host: str = "0.0.0.0", 
         port: int = 9000,
+        max_frame_size: int = 16 * 1024 * 1024,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
+        self._max_frame_size = max_frame_size
         self._auth: Authenticator | None = auth
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -79,6 +82,8 @@ class TcpServerTransport:
             raise ConnectionError("No client connected")
         length_bytes = await self._reader.readexactly(4)
         length = int.from_bytes(length_bytes, "big")
+        if length > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
         return await self._reader.readexactly(length)
 
     async def send(self, data: bytes) -> None:
@@ -103,9 +108,15 @@ class TcpServerTransport:
 
 class TcpClientTransport:
 
-    def __init__(self, host: str = "localhost", port: int = 9000):
+    def __init__(
+        self, 
+        host: str = "localhost", 
+        port: int = 9000,
+        max_frame_size: int = 16 * 1024 * 1024,
+    ):
         self._host = host
         self._port = port
+        self._max_frame_size = max_frame_size
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
 
@@ -127,6 +138,8 @@ class TcpClientTransport:
             raise ConnectionError("Not connected")
         length_bytes = await self._reader.readexactly(4)
         length = int.from_bytes(length_bytes, "big")
+        if length > self._max_frame_size:
+            raise InvalidFrameSizeError(self._max_frame_size)
         return await self._reader.readexactly(length)
 
     async def send(self, data: bytes) -> None:
@@ -154,11 +167,13 @@ class TcpMulticastServerTransport:
         self, 
         host: str = "0.0.0.0", 
         port: int = 9000,
+        max_frame_size: int = 16 * 1024 * 1024,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
         self._auth = auth
+        self._max_frame_size = max_frame_size
         self._clients: dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         self._server: asyncio.Server | None = None
@@ -195,6 +210,8 @@ class TcpMulticastServerTransport:
             while True:
                 length_bytes = await reader.readexactly(4)
                 length = int.from_bytes(length_bytes, "big")
+                if length > self._max_frame_size:
+                    raise InvalidFrameSizeError(self._max_frame_size)
                 payload = await reader.readexactly(length)
                 self._recv_queue.put_nowait((client_id, payload))
         except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
