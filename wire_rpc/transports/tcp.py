@@ -164,6 +164,7 @@ class TcpClientTransport:
         self._max_frame_size = max_frame_size
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._writer_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(
@@ -202,9 +203,10 @@ class TcpClientTransport:
             raise ConnectionError("Not connected")
         if len(data) == 0 or len(data) > self._max_frame_size:
             raise InvalidFrameSizeError(self._max_frame_size)
-        self._writer.write(len(data).to_bytes(4, "big"))
-        self._writer.write(data)
-        await self._writer.drain()
+        async with self._writer_lock:
+            self._writer.write(len(data).to_bytes(4, "big"))
+            self._writer.write(data)
+            await self._writer.drain()
 
     async def __aenter__(self) -> Self:
         await self.connect()
