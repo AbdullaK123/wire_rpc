@@ -1246,11 +1246,16 @@ redis = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "argon2-cffi" },
+    { name = "asyncpg" },
+    { name = "cryptography" },
     { name = "mypy" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "redis" },
 ]
 
 [package.metadata]
@@ -1269,11 +1274,16 @@ provides-extras = ["password", "jwt", "redis", "postgres"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "argon2-cffi", specifier = ">=25.1.0" },
+    { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "cryptography", specifier = ">=44.0.0" },
     { name = "mypy", specifier = "==2.3.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.1" },
     { name = "pyright", specifier = "==1.1.414" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "redis", specifier = ">=5.2.0" },
 ]
 
 [[package]]

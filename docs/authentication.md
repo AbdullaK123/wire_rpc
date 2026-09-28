@@ -143,8 +143,8 @@ Optional features do not add mandatory runtime dependencies:
 
 ```sh
 uv add 'wire-rpc[password,jwt,redis,postgres]'
-# Inside this repository, install every optional backend for development:
-uv sync --locked --all-extras
+# Inside this repository, the default dev group includes all auth test dependencies:
+uv sync --locked
 ```
 
 Cookie login with an application account lookup:
@@ -191,13 +191,13 @@ must provision them first). No backend silently opens or closes an injected pool
 ## Adversarial verification
 
 ```sh
-uv run --locked --all-extras mypy
-uv run --locked --all-extras pyright
-uv run --locked --all-extras pytest -q -W error
+uv run --locked mypy
+uv run --locked pyright
+uv run --locked pytest -q -W error
 # For real shared-backend tests, configure isolated test services:
 WIRE_TEST_REDIS_URL=redis://localhost:6379/0 \
 WIRE_TEST_POSTGRES_DSN=postgresql://user:password@localhost/test_db \
-uv run --locked --all-extras pytest -q tests/auth -W error
+uv run --locked pytest -q tests/auth -W error
 ```
 
 The CI shared-session job provisions real Redis 7 and PostgreSQL 17. Without those
