@@ -19,6 +19,8 @@ def _enc_hook(obj: Any) -> Any:
 
 
 class PydanticCodec:
+    is_text = True
+    media_type = "application/json"
 
     def __init__(self):
         self.encoder = msgspec.json.Encoder(enc_hook=_enc_hook)

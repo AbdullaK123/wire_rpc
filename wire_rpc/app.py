@@ -8,6 +8,8 @@ The App class ties everything together:
 """
 
 import asyncio
+from wire_rpc._execution import ExecutionStats, process
+from wire_rpc._validation import positive_timeout, positive_limit, validate_codec
 from typing import Any, Awaitable, Callable, List, Optional
 
 from wire_rpc._handler import HandlerSpec, inspect_handler
@@ -40,7 +42,28 @@ class App:
         self,
         transport: Transport,
         codec: Codec = MsgSpecJsonCodec(),
+        *,
+        handler_timeout: float = 30.0,
+        startup_timeout: float = 30.0,
+        shutdown_timeout: float = 10.0,
+        max_response_size: int = 4 * 1024 * 1024,
     ):
+        validate_codec(transport, codec)
+        positive_timeout('handler_timeout', handler_timeout)
+        positive_timeout('startup_timeout', startup_timeout)
+        self._startup_timeout = startup_timeout
+        positive_timeout('shutdown_timeout', shutdown_timeout)
+        positive_limit('max_response_size', max_response_size)
+        if max_response_size < 256:
+            raise ValueError('Response budget must allow at least 256 bytes for errors')
+        self._handler_timeout = handler_timeout
+        self._shutdown_timeout = shutdown_timeout
+        self._max_response_size = min(max_response_size, getattr(transport, "max_message_size", max_response_size))
+        if self._max_response_size < 2048:
+            raise ValueError("Response budget must allow 2048 bytes for bounded error envelopes")
+        self._stats = ExecutionStats()
+        self._stopping = asyncio.Event()
+        self._running = False
         self._transport = transport
         self._codec = codec
         self._ctx: Optional[Any] = None
@@ -101,12 +124,10 @@ class App:
         return func
 
     async def _dispatch(self, request: RawWireRequest) -> WireResponse:
-        logger.debug(
-            f"Received request (id={request.id}) for method '{request.method}'"
-        )
+
 
         if request.method not in self._handlers:
-            logger.warning(f"Method '{request.method}' not found.")
+            logger.warning("RPC method not found")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
                 id=request.id,
@@ -116,14 +137,10 @@ class App:
         spec = self._specs[request.method]
         router_mw = self._router_middleware.get(request.method, [])
 
-        if request.params is not None and spec.params_type is not None and spec.has_params:
+        if spec.params_type is not None and spec.has_params:
             try:
                 request.params = self._codec.convert(request.params, spec.params_type)
             except CodecConversionError:
-                logger.warning(
-                    f"Invalid params for request (id={request.id}). "
-                    f"Must be of type {spec.params_type}"
-                )
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
                     id=request.id,
@@ -156,65 +173,88 @@ class App:
 
         return await chain(request, self._ctx)
 
+    @property
+    def stats(self) -> dict:
+        return self._stats.snapshot()
+
+    async def stop(self):
+        """Stop admission and let the listen loop drain owned work."""
+        self._stopping.set()
+
+    async def _next(self, transport):
+        return await self._await_or_stop(transport.recv())
+
+    async def _await_or_stop(self, operation):
+        receive = asyncio.create_task(operation)
+        stopped = asyncio.create_task(self._stopping.wait())
+        try:
+            done, _ = await asyncio.wait({receive, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            if stopped in done:
+                raise ConnectionError('Application stopping')
+            return receive.result()
+        finally:
+            for task in (receive, stopped):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(receive, stopped, return_exceptions=True)
+
     async def _listen(self):
         async with self._transport as t:
-            while True:
+            while not self._stopping.is_set():
                 try:
-                    data = await t.recv()
+                    data = await self._next(t)
                 except (asyncio.IncompleteReadError, ConnectionError):
-                    logger.info("Server has shutdown. Goodbye...")
                     break
-
+                task = asyncio.create_task(process(self, data, self._dispatch))
+                stopped = asyncio.create_task(self._stopping.wait())
                 try:
-                    request = self._codec.decode(data, RawWireRequest)
-                except CodecDecodeError:
-                    logger.warning("Failed to decode request bytes.")
-                    err = WireErrorResponse(
-                        error=InvalidRequestError(
-                            "Invalid request. Request must follow json rpc 2.0 spec"
-                        )
-                    )
-                    await t.send(self._codec.encode(err))
-                    continue
-
+                    done, _ = await asyncio.wait({task,stopped}, return_when=asyncio.FIRST_COMPLETED)
+                    if task not in done:
+                        _, pending = await asyncio.wait({task}, timeout=self._shutdown_timeout)
+                        if pending:
+                            task.cancel()
+                            break
+                    response = task.result()
+                finally:
+                    stopped.cancel()
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task,stopped,return_exceptions=True)
                 try:
-                    response = await self._dispatch(request)
-                except Exception as exc:
-                    logger.opt(exception=True).error(
-                        f"Request (id={request.id}) failed with exception:\n {exc}"
-                    )
-                    err = InternalError(
-                        message="Something went wrong. Please check logs.",
-                        data={"error": str(exc)},
-                    )
-                    await t.send(
-                        self._codec.encode(
-                            WireErrorResponse(error=err, id=request.id)
-                        )
-                    )
-                    continue
-
-                await t.send(self._codec.encode(response))
-                logger.info(f"Responded to request (id={request.id})")
+                    if response is not None:
+                        await t.send(response)
+                    elif hasattr(t, 'finish_notification'):
+                        await t.finish_notification()
+                except (ConnectionError, TimeoutError):
+                    break
 
     def run(self):
         asyncio.run(self._run())
 
     async def _run(self):
-
-        await self._internal_startup()
-
+        if self._running or self._stopping.is_set():
+            raise RuntimeError('Application is already running or stopped')
+        self._running = True
+        dependencies_started = False
+        application_started = False
         try:
-            if self._on_startup:
-                logger.info("Starting wire_rpc server...")
-                self._ctx = await self._on_startup()
-
-            try:
-                await self._listen()
-            finally:
-                if self._on_shutdown:
-                    logger.info("Shutting down server...")
-                    await self._on_shutdown(self._ctx)
+            async with asyncio.timeout(self._startup_timeout):
+                await self._internal_startup()
+                dependencies_started = True
+                if self._on_startup:
+                    self._ctx = await self._on_startup()
+            application_started = True
+            await self._listen()
         finally:
-
-            await self._internal_shutdown()
+            self._stopping.set()
+            try:
+                if application_started and self._on_shutdown:
+                    async with asyncio.timeout(self._shutdown_timeout):
+                        await self._on_shutdown(self._ctx)
+            finally:
+                try:
+                    if dependencies_started:
+                        async with asyncio.timeout(self._shutdown_timeout):
+                            await self._internal_shutdown()
+                finally:
+                    self._running = False

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from wire_rpc._validation import positive_limit
 
 
 class ConnectionLimitExceeded(Exception):
@@ -14,6 +15,7 @@ class ConnectionLimiter:
     """Reserve and release connection capacity with structured cleanup."""
 
     def __init__(self, limit: int):
+        positive_limit("connection limit",limit)
         if limit <= 0:
             raise ValueError("Connection limit must be greater than zero")
 

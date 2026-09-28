@@ -1,416 +1,341 @@
-"""
-WebSocket transports for Wire RPC.
-
-WsServerTransport — Server-side. Runs an aiohttp server accepting
-                     one WebSocket connection. Optionally serves
-                     static files for a self-contained web app.
-WsClientTransport — Client-side. Connects to a WebSocket endpoint.
-
-Receivers accept text and binary frames. Servers send UTF-8 text frames;
-WebSocket handles message framing natively.
-"""
-
+"""Bounded browser-oriented WebSocket transports with explicit ownership."""
 import asyncio
 from pathlib import Path
-from typing import Self
+import ssl
 import uuid
+
 import aiohttp
 from aiohttp import web
-from wire_rpc.auth.protocol import Authenticator
-from wire_rpc.logger import logger
+
+from wire_rpc._validation import positive_limit, positive_timeout
+from wire_rpc.transports._queue import PayloadQueue
 from wire_rpc.transports.errors import TransportError
 from wire_rpc.transports.protocol import StartupComponent
-from wire_rpc.transports.tcp._connection_limiter import (
-    ConnectionLimiter, ConnectionLimitExceeded,
-)
+from wire_rpc.transports.tcp._connection_limiter import ConnectionLimiter, ConnectionLimitExceeded
+
 
 def _decode_text_payload(data: bytes) -> str:
     try:
         return data.decode('utf-8')
     except UnicodeDecodeError as exc:
-        raise TransportError(
-            "Payload was not utf-8 encoded."
-        ) from exc
+        raise TransportError('Payload was not utf-8 encoded.') from exc
 
 
-class WsServerTransport:
+class _WsServer:
+    requires_text_codec = True
+    _multicast = False
 
-    def __init__(
-        self, 
-        host: str = "0.0.0.0", 
-        port: int = 8000, 
-        max_msg_size: int = 4*1024*1024,
-        recv_queue_size: int = 1024,
-        write_timeout: float = 10.0,
-        static_dir: str | None = None,
-        auth: Authenticator | None = None
-    ):
-        if max_msg_size <= 0 or recv_queue_size <= 0:
-            raise ValueError("Message and receive queue limits must be positive")
-        self._host = host
-        self._port = port
-        self._write_timeout = write_timeout
-        self._static_dir = static_dir
-        self._auth = auth
+    def _configure(self, host, port, max_msg_size, recv_queue_size, write_timeout,
+                   max_connections, static_dir, auth, max_queue_bytes, per_peer_queue_size,
+                   auth_timeout, close_timeout, allowed_origins, ssl_context):
+        for name, value in [('max_msg_size',max_msg_size),('max_connections',max_connections)]:
+            positive_limit(name, value)
+        for name, value in [('write_timeout',write_timeout),('auth_timeout',auth_timeout),('close_timeout',close_timeout)]:
+            positive_timeout(name, value)
+        if max_msg_size > max_queue_bytes:
+            raise ValueError('A message must fit the queue byte budget')
+        self._host, self._port = host, port
         self._max_msg_size = max_msg_size
-        self._ws: web.WebSocketResponse | None = None
-        self._runner: web.AppRunner | None = None
-        self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue(
-            maxsize=recv_queue_size
-        )
+        self._write_timeout, self._auth_timeout, self._close_timeout = write_timeout, auth_timeout, close_timeout
+        self._static_dir, self._auth, self._ssl = static_dir, auth, ssl_context
+        self._allowed_origins = frozenset(allowed_origins or ())
+        self._connection_limiter = ConnectionLimiter(max_connections)
+        self._auth_slots = ConnectionLimiter(16)
+        self._recv_queue = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
+        self._runner = None
+        self._ws = None
+        self._clients = {}
+        self._requests = {}
+        self._principals = {}
         self._connected = asyncio.Event()
-        self._connection_limiter = ConnectionLimiter(1)
-        self._session_used = False
         self._closing = False
-        self._connect_task: asyncio.Task | None = None
+        self._session_used = False
+
+    @property
+    def max_message_size(self):
+        return self._max_msg_size
+
+    @property
+    def stats(self):
+        return {**self._recv_queue.stats, 'connections':len(self._clients)}
 
     async def startup(self):
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
 
-    async def connect(self):
-        app = web.Application()
-        app.router.add_get("/ws", self._handle_ws)
-
-        if self._auth:
-            app.router.add_post("/login", self._auth.login)
-            app.router.add_post("/logout", self._auth.logout)
-
-        if self._static_dir:
-            # Serve index.html on /
-            static_path = Path(self._static_dir)
-            async def serve_index(request):
-                return web.FileResponse(static_path / "index.html")
-            app.router.add_get("/", serve_index)
-            app.router.add_static("/static", static_path)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        site = web.TCPSite(self._runner, self._host, self._port)
-        await site.start()
-        logger.info(f"Wire WS server running at http://{self._host}:{self._port}")
-        await self._connected.wait()
-
-    async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        if self._closing or self._session_used:
-            raise web.HTTPServiceUnavailable(text="Unicast session unavailable")
-        try:
-            async with self._connection_limiter.slot():
-                return await self._serve_ws(request)
-        except ConnectionLimitExceeded as exc:
-            raise web.HTTPServiceUnavailable(text="No connection slot available") from exc
-
-    async def _serve_ws(self, request: web.Request) -> web.WebSocketResponse:
-
-        if self._auth:
-            user_id = await self._auth.verify(request)
-            if user_id is None:
-                raise web.HTTPUnauthorized(text="Invalid credentials")
-
-        ws = web.WebSocketResponse(
-            max_msg_size=self._max_msg_size,
-            heartbeat=30.0,
-            autoping=True,
-            autoclose=True
-        )
-        await ws.prepare(request)
-        if self._closing:
-            await ws.close()
-            return ws
-        self._ws = ws
-        # A byte-only unicast stream cannot correlate old replies to a new peer.
-        self._session_used = True
-        self._connected.set()
-        logger.info("WebSocket client connected")
-
-        try:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    await self._recv_queue.put(msg.data)
-                elif msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._recv_queue.put(msg.data.encode('utf-8'))
-        finally:
-            if self._ws is ws:
-                self._ws = None
-                self._connected.clear()
-            await ws.close()
-            logger.info("WebSocket client disconnected")
-
-        return ws
-
     async def shutdown(self):
         if self._auth and isinstance(self._auth, StartupComponent):
-              await self._auth.shutdown()
+            await self._auth.shutdown()
 
-    async def close(self):
-        self._closing = True
-        if self._connect_task is not None:
-            self._connect_task.cancel()
-            await asyncio.gather(self._connect_task, return_exceptions=True)
-            self._connect_task = None
+    def _check_origin(self, request):
+        origin = request.headers.get('Origin')
+        if isinstance(origin, str) and origin not in self._allowed_origins:
+            raise web.HTTPForbidden(text='Origin not allowed')
 
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
-        if self._runner:
-            await self._runner.cleanup()
-            self._runner = None
+    async def _auth_request(self, request, handler):
+        self._check_origin(request)
+        try:
+            async with self._auth_slots.slot():
+                async with asyncio.timeout(self._auth_timeout):
+                    return await handler(request)
+        except ConnectionLimitExceeded:
+            raise web.HTTPServiceUnavailable(text='Authentication capacity unavailable') from None
+        except TimeoutError:
+            raise web.HTTPGatewayTimeout(text='Authentication timed out') from None
 
-    async def recv(self) -> bytes:
-        return await self._recv_queue.get()
-
-    async def send(self, data: bytes) -> None:
-        if self._ws is None:
-            raise ConnectionError("No WebSocket client connected")
-        async with asyncio.timeout(self._write_timeout):
-            await self._ws.send_str(_decode_text_payload(data))
-
-    async def __aenter__(self) -> Self:
-        # Don't await connect — run it as a background task
-        # so the listen loop can start while waiting for a client
-        self._connect_task = asyncio.create_task(self.connect())
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object
-    ) -> None:
-        await self.close()
-
-
-class MulticastWsServerTransport:
-
-    def __init__(
-        self,
-        host: str = "0.0.0.0",
-        port: int = 8000,
-        max_msg_size: int = 4*1024*1024,
-        recv_queue_size: int = 1024,
-        write_timeout: float = 10.0,
-        max_connections: int = 1024,
-        static_dir: str | None = None,
-        auth: Authenticator | None = None
-    ):
-        if max_msg_size <= 0 or recv_queue_size <= 0:
-            raise ValueError("Message and receive queue limits must be positive")
-        self._host = host
-        self._port = port
-        self._max_connections = max_connections
-        self._connection_limiter = ConnectionLimiter(max_connections)
-        self._closing = False
-        self._static_dir = static_dir
-        self._max_msg_size = max_msg_size
-        self._write_timeout = write_timeout
-        self._clients: dict[str, web.WebSocketResponse] = {}
-        self._runner: web.AppRunner | None = None
-        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=recv_queue_size)
-        self._auth = auth
-
-    async def startup(self):
-        if self._auth and isinstance(self._auth, StartupComponent):
-              await self._auth.startup()
-
-    async def connect(self):
-        
-
-        app = web.Application()
-        app.router.add_get("/ws", self._handle_ws)
-
+    async def _start(self):
+        if self._closing or self._runner is not None:
+            raise RuntimeError('Transport is closed or already listening')
+        app = web.Application(client_max_size=self._max_msg_size)
+        app.router.add_get('/ws', self._handle_ws)
         if self._auth:
-            app.router.add_post("/login", self._auth.login)
-            app.router.add_post("/logout", self._auth.logout)
-
+            async def login(request):
+                return await self._auth_request(request, self._auth.login)
+            async def logout(request):
+                return await self._auth_request(request, self._auth.logout)
+            app.router.add_post('/login', login)
+            app.router.add_post('/logout', logout)
         if self._static_dir:
             static_path = Path(self._static_dir)
+            async def index(request):
+                return web.FileResponse(static_path / 'index.html')
+            app.router.add_get('/', index)
+            app.router.add_static('/static', static_path)
+        self._runner = web.AppRunner(app, shutdown_timeout=self._close_timeout)
+        try:
+            await self._runner.setup()
+            await web.TCPSite(self._runner, self._host, self._port, ssl_context=self._ssl).start()
+        except BaseException:
+            await self.close()
+            raise
 
-            async def serve_index(request: web.Request) -> web.FileResponse:
-                return web.FileResponse(static_path / "index.html")
+    async def connect(self):
+        await self._start()
+        if not self._multicast:
+            await self._connected.wait()
+            if self._closing:
+                raise ConnectionError('Transport closed')
 
-            app.router.add_get("/", serve_index)
-            app.router.add_static("/static", static_path)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-
-        site = web.TCPSite(self._runner, self._host, self._port)
-
-        await site.start()
-        logger.info(f"Multicast WS server running at http://{self._host}:{self._port}")
-
-
-    async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        if self._closing:
-            raise web.HTTPServiceUnavailable(text="Transport is closing")
+    async def _handle_ws(self, request):
+        if self._closing or (not self._multicast and self._session_used):
+            raise web.HTTPServiceUnavailable(text='Connection unavailable')
+        self._check_origin(request)
         try:
             async with self._connection_limiter.slot():
                 return await self._serve_ws(request)
         except ConnectionLimitExceeded as exc:
-            raise web.HTTPServiceUnavailable(text="No connection slot available") from exc
+            raise web.HTTPServiceUnavailable(text='No connection slot available') from exc
 
-    async def _serve_ws(self, request: web.Request) -> web.WebSocketResponse:
-
-        client_id = str(uuid.uuid4())
-
+    async def _serve_ws(self, request):
+        principal = None
         if self._auth:
-            user_id = await self._auth.verify(request)
-            if user_id is None:
-                raise web.HTTPUnauthorized(text="Invalid credentials")
-
-        ws = web.WebSocketResponse(
-            max_msg_size=self._max_msg_size,
-            heartbeat=30.0,
-            autoping=True,
-            autoclose=True
-        )
-        await ws.prepare(request)
-        if self._closing:
-            await ws.close()
-            return ws
-
-        self._clients[client_id] = ws
-
-        logger.info(f"Client {client_id} connected ({len(self._clients)} total)")
-
-        try:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    await self._recv_queue.put((client_id, msg.data))
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._recv_queue.put((client_id, msg.data.encode()))
-        finally:
-            if self._clients.get(client_id) is ws:
-                self._clients.pop(client_id, None)
-            await ws.close()
-            logger.info(f"Client {client_id} disconnected ({len(self._clients)} total)")
-
-        return ws
-
-    async def recv(self) -> tuple[str, bytes]:
-        return await self._recv_queue.get()
-
-    async def send(self, client_id: str, data: bytes):
-
-        ws = self._clients.get(client_id)
-
-        if ws is None:
-            raise ConnectionError(f"Client (id={client_id}) not connected")
-
-        async with asyncio.timeout(self._write_timeout):
-            await ws.send_str(_decode_text_payload(data))
-
-    async def broadcast(self, data: bytes):
-
-        msg = _decode_text_payload(data)
-        dead: list[tuple[str, web.WebSocketResponse]] = []
-
-        for client_id, ws in list(self._clients.items()):
             try:
-                async with asyncio.timeout(self._write_timeout):
-                    await ws.send_str(msg)
-            except (ConnectionError, TimeoutError):
-                dead.append((client_id, ws))
-
-        for client_id, ws in dead:
+                async with asyncio.timeout(self._auth_timeout):
+                    principal = await self._auth.verify(request)
+            except TimeoutError:
+                raise web.HTTPGatewayTimeout(text='Authentication timed out') from None
+            if principal is None:
+                raise web.HTTPUnauthorized(text='Invalid credentials')
+        ws = web.WebSocketResponse(max_msg_size=self._max_msg_size, heartbeat=30.0,
+                                   timeout=self._close_timeout, autoping=True, autoclose=True,
+                                   compress=False)
+        async with asyncio.timeout(self._auth_timeout):
+            await ws.prepare(request)
+        if self._closing:
+            await self._close_ws(ws)
+            return ws
+        client_id = str(uuid.uuid4()) if self._multicast else 'unicast'
+        self._clients[client_id] = ws
+        self._requests[client_id] = request
+        self._principals[client_id] = principal
+        if not self._multicast:
+            self._ws = ws
+            self._session_used = True
+        self._connected.set()
+        try:
+            async for msg in ws:
+                if msg.type in (aiohttp.WSMsgType.BINARY, aiohttp.WSMsgType.TEXT):
+                    data = msg.data.encode('utf-8') if msg.type == aiohttp.WSMsgType.TEXT else msg.data
+                    # Encode can expand decoded text; enforce the actual byte budget.
+                    if len(data) > self._max_msg_size:
+                        break
+                    await self._recv_queue.put((client_id,data) if self._multicast else data)
+        except ConnectionError:
+            pass
+        finally:
             if self._clients.get(client_id) is ws:
                 self._clients.pop(client_id, None)
-            await ws.close()
+                self._requests.pop(client_id, None)
+                self._principals.pop(client_id, None)
+            self._recv_queue.drop_peer(client_id if self._multicast else None)
+            if not self._multicast:
+                self._ws = None
+                self._recv_queue.close()
+            await self._close_ws(ws)
+        return ws
 
-    
+    async def get_principal(self, client_id=None):
+        key = client_id if self._multicast else 'unicast'
+        ws = self._clients.get(key)
+        if ws is None:
+            raise PermissionError('Peer disconnected')
+        principal = self._principals[key]
+        if self._auth:
+            async with asyncio.timeout(self._auth_timeout):
+                current = await self._auth.verify(self._requests[key])
+            if current is None or current != principal:
+                await self._close_ws(ws)
+                raise PermissionError('Session expired or revoked')
+        if self._closing or self._clients.get(key) is not ws:
+            raise PermissionError('Peer disconnected during validation')
+        return principal
 
-    async def shutdown(self):
-        if self._auth and isinstance(self._auth, StartupComponent):
-              await self._auth.shutdown()
+    async def _close_ws(self, ws):
+        try:
+            async with asyncio.timeout(self._close_timeout):
+                await ws.close()
+        except (TimeoutError, ConnectionError):
+            pass
+
+    async def recv(self):
+        return await self._recv_queue.get()
+
+    async def _send(self, ws, data):
+        if len(data) > self._max_msg_size:
+            raise TransportError('WebSocket payload exceeds byte limit')
+        if ws is None:
+            raise ConnectionError('Peer not connected')
+        try:
+            async with asyncio.timeout(self._write_timeout):
+                await ws.send_str(_decode_text_payload(data))
+        except (TimeoutError, ConnectionError, asyncio.CancelledError):
+            await self._close_ws(ws)
+            raise
 
     async def close(self):
         self._closing = True
-
-        for client_id, ws in list(self._clients.items()):
-            await ws.close()
-
+        self._connected.set()
+        self._recv_queue.close()
+        await asyncio.gather(*(self._close_ws(ws) for ws in list(self._clients.values())))
         self._clients.clear()
+        self._requests.clear()
+        self._principals.clear()
+        self._ws = None
+        if self._runner is not None:
+            runner, self._runner = self._runner, None
+            async with asyncio.timeout(self._close_timeout * 2):
+                await runner.cleanup()
 
-        if self._runner:
-            await self._runner.cleanup()
-            self._runner = None
-
-
-    async def __aenter__(self) -> Self:
-        await self.connect()
+    async def __aenter__(self):
+        # Bind failures surface before the application enters its receive loop.
+        await self._start()
         return self
- 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
+
+    async def __aexit__(self, *args):
         await self.close()
 
-            
-class WsClientTransport:
 
-    def __init__(
-        self, 
-        url: str = "ws://localhost:8000/ws",
-        receive_timeout: float = 10.0,
-        close_timeout: float = 10.0
-    ):
+class WsServerTransport(_WsServer):
+    def __init__(self, host='0.0.0.0', port=8000, max_msg_size=1024*1024,
+                 recv_queue_size=256, write_timeout=10.0, static_dir=None, auth=None,
+                 *, max_queue_bytes=16*1024*1024, auth_timeout=10.0, close_timeout=5.0,
+                 allowed_origins=None, ssl_context: ssl.SSLContext | None=None):
+        self._configure(host,port,max_msg_size,recv_queue_size,write_timeout,1,static_dir,auth,
+                        max_queue_bytes,recv_queue_size,auth_timeout,close_timeout,allowed_origins,ssl_context)
+
+    async def send(self, data):
+        await self._send(self._ws, data)
+
+
+class MulticastWsServerTransport(_WsServer):
+    _multicast = True
+
+    def __init__(self, host='0.0.0.0', port=8000, max_msg_size=1024*1024,
+                 recv_queue_size=256, write_timeout=10.0, max_connections=64,
+                 static_dir=None, auth=None, *, max_queue_bytes=16*1024*1024,
+                 per_peer_queue_size=16, auth_timeout=10.0, close_timeout=5.0,
+                 allowed_origins=None, ssl_context: ssl.SSLContext | None=None):
+        self._configure(host,port,max_msg_size,recv_queue_size,write_timeout,max_connections,static_dir,auth,
+                        max_queue_bytes,per_peer_queue_size,auth_timeout,close_timeout,allowed_origins,ssl_context)
+
+    async def send(self, client_id, data):
+        await self._send(self._clients.get(client_id), data)
+
+    async def broadcast(self, data):
+        async def deliver(client_id, ws):
+            try:
+                await self._send(ws, data)
+            except (ConnectionError, TimeoutError):
+                if self._clients.get(client_id) is ws:
+                    self._clients.pop(client_id, None)
+                await self._close_ws(ws)
+        # Bounded by admission. A slow peer does not serialize every other send.
+        await asyncio.gather(*(deliver(key, ws) for key,ws in list(self._clients.items())))
+
+
+class WsClientTransport:
+    requires_text_codec = True
+
+    def __init__(self, url='ws://localhost:8000/ws', receive_timeout=10.0, close_timeout=5.0,
+                 *, connect_timeout=10.0, write_timeout=10.0, max_msg_size=1024*1024):
+        for name,value in [('receive_timeout',receive_timeout),('close_timeout',close_timeout),
+                           ('connect_timeout',connect_timeout),('write_timeout',write_timeout)]:
+            positive_timeout(name,value)
+        positive_limit('max_msg_size',max_msg_size)
         self._url = url
-        self._receive_timeout = receive_timeout
-        self._close_timeout = close_timeout
-        self._session: aiohttp.ClientSession | None = None
-        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._receive_timeout, self._close_timeout = receive_timeout, close_timeout
+        self._connect_timeout, self._write_timeout = connect_timeout, write_timeout
+        self._max_msg_size = max_msg_size
+        self._session = self._ws = None
 
     async def connect(self):
+        if self._session is not None:
+            raise RuntimeError('Already connected')
         self._session = aiohttp.ClientSession()
-        self._ws = await self._session.ws_connect(url=self._url)
+        try:
+            async with asyncio.timeout(self._connect_timeout):
+                self._ws = await self._session.ws_connect(self._url, max_msg_size=self._max_msg_size,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=self._close_timeout), compress=0)
+        except BaseException:
+            await self.close()
+            raise
 
     async def close(self):
-        if self._ws:
-            async with asyncio.timeout(self._close_timeout):
-                await self._ws.close()
+        try:
+            if self._ws is not None:
+                async with asyncio.timeout(self._close_timeout):
+                    await self._ws.close()
+        finally:
             self._ws = None
-        if self._session:
-            await self._session.close()
-            self._session = None
+            if self._session is not None:
+                await self._session.close()
+                self._session = None
 
-    async def recv(self) -> bytes:
+    async def recv(self):
         if self._ws is None:
-            raise ConnectionError("Not connected")
+            raise ConnectionError('Not connected')
         async with asyncio.timeout(self._receive_timeout):
             msg = await self._ws.receive()
         if msg.type == aiohttp.WSMsgType.BINARY:
             return msg.data
-        elif msg.type == aiohttp.WSMsgType.TEXT:
+        if msg.type == aiohttp.WSMsgType.TEXT:
             return msg.data.encode('utf-8')
-        elif msg.type == aiohttp.WSMsgType.ERROR:
-            raise ConnectionError(f"WebSocket error: {self._ws.exception()}")
-        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
-            raise ConnectionError("WebSocket closed")
-        else:
-            raise ConnectionError(f"Unexpected message type: {msg.type}")
+        raise ConnectionError('WebSocket closed or invalid message')
 
-    async def send(self, data: bytes) -> None:
+    async def send(self, data):
         if self._ws is None:
-            raise ConnectionError("Not connected")
-        await self._ws.send_bytes(data)
+            raise ConnectionError('Not connected')
+        if len(data) > self._max_msg_size:
+            raise TransportError('WebSocket payload exceeds byte limit')
+        async with asyncio.timeout(self._write_timeout):
+            await self._ws.send_str(_decode_text_payload(data))
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self):
         await self.connect()
         return self
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object
-    ) -> None:
+    async def __aexit__(self, *args):
         await self.close()
 
-__all__ = [
-    "WsClientTransport",
-    "WsServerTransport",
-    "MulticastWsServerTransport"
-]
+
+__all__ = ['WsClientTransport','WsServerTransport','MulticastWsServerTransport']
