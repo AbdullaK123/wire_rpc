@@ -8,12 +8,12 @@ WebSocket, and stdio transports.
 Requires Python 3.12 or newer and uv.
 
 ```sh
-uv sync --locked --all-extras
-uv run --locked --all-extras mypy
-uv run --locked --all-extras pyright
-uv run --locked --all-extras pytest -q -W error
+uv sync --locked
+uv run --locked mypy
+uv run --locked pyright
+uv run --locked pytest -q -W error
 uv build --no-sources
-uv run --locked --all-extras python scripts/check_wheel.py
+uv run --locked python scripts/check_wheel.py
 ```
 
 Mypy checks function bodies even when signatures are unannotated. Pyright runs
