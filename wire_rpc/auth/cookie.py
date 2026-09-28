@@ -27,6 +27,7 @@ class CookieSessionAuth:
         self._cookie_name = cookie_name
         self._secure = secure
         self._max_age = max_age
+        self._started: list[StartupComponent] = []
 
     async def startup(self) -> None:
         self._started = []
@@ -40,7 +41,7 @@ class CookieSessionAuth:
             raise
 
     async def shutdown(self) -> None:
-        components, self._started = getattr(self, '_started', []), []
+        components, self._started = self._started, []
         failure = None
         for component in reversed(components):
             try:
