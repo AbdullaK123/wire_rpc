@@ -75,7 +75,7 @@ def _ensure_not_idle(
 def _track_operation(
     inflight: set[asyncio.Task[object]],
     closing: bool,
-) -> Generator[None]:
+) -> Generator[None, None, None]:
     if closing:
         raise ConnectionError("Transport is closing")
 
@@ -142,6 +142,8 @@ class TcpServerTransport:
         auth: Authenticator | None = None,
         shutdown_timeout: float = 30.0,
     ):
+        if not 0 < max_frame_size <= 0xFFFFFFFF:
+            raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
 
@@ -165,6 +167,7 @@ class TcpServerTransport:
         self._server: asyncio.Server | None = None
         self._keep_alive = keep_alive
         self._connected = asyncio.Event()
+        self._accepting = False
         self._closing = False
         self._inflight: set[asyncio.Task[object]] = set()
         self._connection_tasks: set[asyncio.Task[object]] = set()
@@ -212,10 +215,13 @@ class TcpServerTransport:
             self._connection_tasks.add(task)
 
         transferred = False
+        reserved = False
 
         try:
-            if self._closing:
+            if self._closing or self._accepting or self._connection is not None:
                 return
+            self._accepting = True
+            reserved = True
 
             if self._keep_alive is not None:
                 configure_keepalive(writer, self._keep_alive)
@@ -240,6 +246,8 @@ class TcpServerTransport:
         except asyncio.TimeoutError:
             logger.warning("Authentication timeout")
         finally:
+            if reserved:
+                self._accepting = False
             if not transferred:
                 await _close_writer(writer)
             if task is not None:
@@ -287,21 +295,20 @@ class TcpServerTransport:
             if connection is None:
                 raise ConnectionError("No client connected")
 
-            try:
-                return await _read_frame(
-                    connection,
-                    max_frame_size=self._max_frame_size,
-                    read_timeout=self._read_timeout,
-                    idle_timeout=self._idle_timeout,
-                )
-            except IdleTimeoutError:
-                logger.error("Idle timeout")
-                await connection.close()
-                raise
-            except asyncio.TimeoutError:
-                logger.error("Read timeout")
-                await connection.close()
-                raise
+            async with connection.read_lock:
+                if connection.writer.is_closing():
+                    raise ConnectionError("Connection closed")
+                try:
+                    return await _read_frame(
+                        connection,
+                        max_frame_size=self._max_frame_size,
+                        read_timeout=self._read_timeout,
+                        idle_timeout=self._idle_timeout,
+                    )
+                except BaseException:
+                    # Partial reads cannot be resumed at a known frame boundary.
+                    await connection.close()
+                    raise
 
     async def send(self, data: bytes) -> None:
         with _track_operation(self._inflight, self._closing):
@@ -316,6 +323,8 @@ class TcpServerTransport:
                 _ensure_not_idle(connection, self._idle_timeout)
 
                 async with connection.write_lock:
+                    if connection.writer.is_closing():
+                        raise ConnectionError("Connection closed")
                     connection.writer.write(len(data).to_bytes(4, "big"))
                     connection.writer.write(data)
                     async with asyncio.timeout(self._write_timeout):
@@ -359,6 +368,8 @@ class TcpClientTransport:
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         shutdown_timeout: float = 30.0,
     ):
+        if not 0 < max_frame_size <= 0xFFFFFFFF:
+            raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
 
@@ -419,21 +430,20 @@ class TcpClientTransport:
             if connection is None:
                 raise ConnectionError("Not connected")
 
-            try:
-                return await _read_frame(
-                    connection,
-                    max_frame_size=self._max_frame_size,
-                    read_timeout=self._read_timeout,
-                    idle_timeout=self._idle_timeout,
-                )
-            except IdleTimeoutError:
-                logger.error("Idle timeout")
-                await connection.close()
-                raise
-            except asyncio.TimeoutError:
-                logger.error("Read timeout")
-                await connection.close()
-                raise
+            async with connection.read_lock:
+                if connection.writer.is_closing():
+                    raise ConnectionError("Connection closed")
+                try:
+                    return await _read_frame(
+                        connection,
+                        max_frame_size=self._max_frame_size,
+                        read_timeout=self._read_timeout,
+                        idle_timeout=self._idle_timeout,
+                    )
+                except BaseException:
+                    # Partial reads cannot be resumed at a known frame boundary.
+                    await connection.close()
+                    raise
 
     async def send(self, data: bytes) -> None:
         with _track_operation(self._inflight, self._closing):
@@ -448,6 +458,8 @@ class TcpClientTransport:
                 _ensure_not_idle(connection, self._idle_timeout)
 
                 async with connection.write_lock:
+                    if connection.writer.is_closing():
+                        raise ConnectionError("Connection closed")
                     connection.writer.write(len(data).to_bytes(4, "big"))
                     connection.writer.write(data)
                     async with asyncio.timeout(self._write_timeout):
@@ -495,6 +507,8 @@ class TcpMulticastServerTransport:
         auth: Authenticator | None = None,
         shutdown_timeout: float = 30.0,
     ):
+        if not 0 < max_frame_size <= 0xFFFFFFFF:
+            raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
 
@@ -516,6 +530,8 @@ class TcpMulticastServerTransport:
             ssl_shutdown_timeout if ssl_context is not None else None
         )
         self._connection_limiter = ConnectionLimiter(max_connections)
+        if recv_queue_size <= 0:
+            raise ValueError("Receive queue size must be positive")
         self._recv_queue_size = recv_queue_size
         self._clients: dict[str, TcpConnection] = {}
         self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(
@@ -589,7 +605,7 @@ class TcpMulticastServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        client_id = str(uuid.uuid4())[:8]
+        client_id = str(uuid.uuid4())
         addr = None
         connection = TcpConnection(reader=reader, writer=writer)
         registered = False
@@ -707,6 +723,8 @@ class TcpMulticastServerTransport:
                 _ensure_not_idle(connection, self._idle_timeout)
 
                 async with connection.write_lock:
+                    if connection.writer.is_closing():
+                        raise ConnectionError("Connection closed")
                     connection.writer.write(len(data).to_bytes(4, "big"))
                     connection.writer.write(data)
                     async with asyncio.timeout(self._write_timeout):

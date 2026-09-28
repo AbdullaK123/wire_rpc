@@ -1,9 +1,43 @@
 import asyncio
 from typing import Self
 import sys
+
+from wire_rpc.transports.errors import InvalidFrameSizeError
+
+
+async def _read_frame(reader, writer, max_frame_size):
+    if writer.is_closing():
+        raise ConnectionError("Stdio channel closed")
+    try:
+        length = int.from_bytes(await reader.readexactly(4), "big")
+        if length == 0 or length > max_frame_size:
+            raise InvalidFrameSizeError(max_frame_size)
+        return await reader.readexactly(length)
+    except BaseException:
+        writer.close()
+        raise
+
+
+async def _write_frame(writer, data, max_frame_size):
+    if len(data) == 0 or len(data) > max_frame_size:
+        raise InvalidFrameSizeError(max_frame_size)
+    if writer.is_closing():
+        raise ConnectionError("Stdio channel closed")
+    try:
+        writer.write(len(data).to_bytes(4, "big") + data)
+        await writer.drain()
+    except BaseException:
+        writer.close()
+        raise
+
 class StdIoTransport:
 
-    def __init__(self, *cmd: str):
+    def __init__(self, *cmd: str, max_frame_size: int = 16 * 1024 * 1024):
+        if not 0 < max_frame_size <= 0xFFFFFFFF:
+            raise ValueError("Frame size must fit a positive 4-byte length")
+        self._max_frame_size = max_frame_size
+        self._read_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         self._cmd = cmd
         self.proc: asyncio.subprocess.Process | None = None
         self.stdin: asyncio.StreamWriter | None = None
@@ -39,22 +73,19 @@ class StdIoTransport:
 
     async def recv(self) -> bytes:
 
-        if self.stdout is None:
+        if self.stdout is None or self.stdin is None:
             raise RuntimeError("Can not receive bytes without calling .connect() first.")
         
-        length_bytes = await self.stdout.readexactly(4)
-        length = int.from_bytes(length_bytes, "big")
-        payload = await self.stdout.readexactly(length)
-        return payload
+        async with self._read_lock:
+            return await _read_frame(self.stdout, self.stdin, self._max_frame_size)
 
     async def send(self, data: bytes) -> None:
 
         if self.stdin is None:
             raise RuntimeError("Can not send bytes without calling .connect() first.")
 
-        self.stdin.write(len(data).to_bytes(4, "big"))
-        self.stdin.write(data)
-        await self.stdin.drain()
+        async with self._write_lock:
+            await _write_frame(self.stdin, data, self._max_frame_size)
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -70,7 +101,12 @@ class StdIoTransport:
 
 class StdIoServerTransport:
 
-    def __init__(self):
+    def __init__(self, *, max_frame_size: int = 16 * 1024 * 1024):
+        if not 0 < max_frame_size <= 0xFFFFFFFF:
+            raise ValueError("Frame size must fit a positive 4-byte length")
+        self._max_frame_size = max_frame_size
+        self._read_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         self.writer: asyncio.StreamWriter | None = None
         self.reader: asyncio.StreamReader | None = None
 
@@ -103,22 +139,19 @@ class StdIoServerTransport:
 
     async def recv(self) -> bytes:
 
-        if self.reader is None:
+        if self.reader is None or self.writer is None:
             raise RuntimeError("Can not receive bytes without calling .connect() first.")
         
-        length_bytes = await self.reader.readexactly(4)
-        length = int.from_bytes(length_bytes, "big")
-        payload = await self.reader.readexactly(length)
-        return payload
+        async with self._read_lock:
+            return await _read_frame(self.reader, self.writer, self._max_frame_size)
 
     async def send(self, data: bytes) -> None:
 
         if self.writer is None:
             raise RuntimeError("Can not send bytes without calling .connect() first.")
 
-        self.writer.write(len(data).to_bytes(4, "big"))
-        self.writer.write(data)
-        await self.writer.drain()
+        async with self._write_lock:
+            await _write_frame(self.writer, data, self._max_frame_size)
 
     async def __aenter__(self) -> Self:
         await self.connect()
