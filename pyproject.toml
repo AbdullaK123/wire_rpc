@@ -12,6 +12,12 @@ dependencies = [
     "typing-extensions>=4.16.0",
 ]
 
+[project.optional-dependencies]
+password = ["argon2-cffi>=25.1.0"]
+jwt = ["PyJWT[crypto]>=2.10.1"]
+redis = ["redis>=5.2.0"]
+postgres = ["asyncpg>=0.30.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-requires = "hatchling"

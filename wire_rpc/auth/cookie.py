@@ -4,6 +4,8 @@ from wire_rpc.auth.sessions.protocol import SessionStore
 from aiohttp import web
 
 from wire_rpc.transports.protocol import StartupComponent
+from wire_rpc.auth._util import validated, token_text
+from wire_rpc.auth.errors import AuthUnavailableError
 
 class CookieSessionAuth:
     """
@@ -22,8 +24,10 @@ class CookieSessionAuth:
         secure: bool = True,
         max_age: int = 86400,
     ):
+        from wire_rpc._validation import positive_limit
+        positive_limit("max_age", max_age)
         self._validator = credential_validator
-        self._sessions = session_store or InMemorySessionStore(ttl=max_age)
+        self._sessions = session_store if session_store is not None else InMemorySessionStore(ttl=max_age)
         self._cookie_name = cookie_name
         self._secure = secure
         self._max_age = max_age
@@ -57,13 +61,18 @@ class CookieSessionAuth:
         except Exception:
             return web.json_response({"ok": False, "error": "Invalid request body"}, status=400)
  
-        user_id = await self._validator.validate(body)
+        if type(body) is not dict:
+            return web.json_response({"ok": False, "error": "Invalid request body"}, status=400)
+        try:
+            user_id = await validated(self._validator, body)
+        except AuthUnavailableError:
+            return web.json_response({"ok": False, "error": "Authentication unavailable"}, status=503)
         if user_id is None:
             return web.json_response({"ok": False, "error": "Invalid credentials"}, status=401)
  
         try:
             session_id = await self._sessions.create(user_id)
-        except SessionCapacityError:
+        except AuthUnavailableError:
             return web.json_response({'ok':False,'error':'Session capacity unavailable'},status=503)
  
         response = web.json_response({"ok": True, "user_id": user_id})
@@ -79,9 +88,9 @@ class CookieSessionAuth:
  
     async def verify(self, request: web.Request) -> str | None:
         session_id = request.cookies.get(self._cookie_name)
-        if session_id is None:
+        if session_id is None or not token_text(session_id):
             return None
-        return await self._sessions.validate(session_id)
+        return await validated(self._sessions, session_id)
  
     async def logout(self, request: web.Request) -> web.Response:
         """Optional — destroy the session and clear the cookie."""

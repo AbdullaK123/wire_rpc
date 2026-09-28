@@ -1,4 +1,5 @@
 
+from wire_rpc.auth._util import identity
 import asyncio
 from typing import Any
 import os
@@ -9,8 +10,10 @@ class HmacChallengAuth:
 
     def __init__(
         self,
-        secret: str
+        secret: str,
+        *, principal: str = "hmac-client"
     ):
+        self._principal = identity(principal)
         self._secret = secret.encode() if isinstance(secret, str) else secret
 
     async def authenticate(self, connection) -> None:
@@ -60,8 +63,7 @@ class HmacChallengAuth:
                 writer.write(ok)
                 await writer.drain()
 
-                addr = writer.get_extra_info("peername")
-                return f"{addr[0]}:{addr[1]}"
+                return self._principal
 
             reject = b'REJECT'
             writer.write(len(reject).to_bytes(4, "big"))

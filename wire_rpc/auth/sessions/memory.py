@@ -1,24 +1,19 @@
-"""Bounded single-process session storage; use shared storage across workers."""
+"""Bounded single-process sessions. Each operation has no suspension point."""
 import heapq
+import json
 import time
-import uuid
 from typing import Any
-from wire_rpc._validation import positive_limit, positive_timeout
+from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
+from wire_rpc.auth.sessions._base import SessionStoreBase
 
 
-class SessionCapacityError(Exception):
-    pass
-
-
-class InMemorySessionStore:
-    def __init__(self, ttl: int = 86400, *, max_sessions: int = 10000):
-        positive_timeout('ttl', ttl)
-        positive_limit('max_sessions', max_sessions)
+class InMemorySessionStore(SessionStoreBase):
+    def __init__(self, ttl: float = 86400, *, max_sessions: int = 10000):
+        super().__init__(ttl, max_sessions=max_sessions)
         self._sessions: dict[str, tuple[str, float]] = {}
         self._expiry: list[tuple[float, str]] = []
-        self._ttl, self._max_sessions = ttl, max_sessions
 
-    def _prune(self):
+    def _prune(self) -> None:
         now = time.monotonic()
         while self._expiry and self._expiry[0][0] <= now:
             expiry, key = heapq.heappop(self._expiry)
@@ -26,24 +21,40 @@ class InMemorySessionStore:
             if entry is not None and entry[1] == expiry:
                 del self._sessions[key]
         if len(self._expiry) > 2 * self._max_sessions:
-            self._expiry = [(expiry,key) for key,(_,expiry) in self._sessions.items()]
+            self._expiry = [(expiry, key) for key, (_, expiry) in self._sessions.items()]
             heapq.heapify(self._expiry)
 
-    async def create(self, user_id: str, payload: dict[str, Any] | None = None) -> str:
+    async def _execute(self, operation: str, key: str = '', value: str = '', new_key: str = '') -> Any:
         self._prune()
-        if len(self._sessions) >= self._max_sessions:
-            raise SessionCapacityError('Session capacity exhausted')
-        key = uuid.uuid4().hex
-        expiry = time.monotonic() + self._ttl
-        self._sessions[key] = (user_id,expiry)
-        heapq.heappush(self._expiry,(expiry,key))
-        return key
-
-    async def validate(self, session_id: str) -> str | None:
-        self._prune()
-        entry = self._sessions.get(session_id)
-        return entry[0] if entry else None
-
-    async def destroy(self, session_id: str):
-        self._sessions.pop(session_id, None)
-        self._prune()
+        if operation == 'create':
+            if key in self._sessions:
+                raise AuthUnavailableError('Session token collision')
+            if len(self._sessions) >= self._max_sessions:
+                raise SessionCapacityError('Session capacity exhausted')
+            expiry = time.monotonic() + self._ttl
+            self._sessions[key] = (value, expiry)
+            heapq.heappush(self._expiry, (expiry, key))
+        elif operation == 'get':
+            entry = self._sessions.get(key)
+            return entry[0] if entry else None
+        elif operation == 'destroy':
+            self._sessions.pop(key, None)
+            self._prune()
+        elif operation == 'rotate':
+            if key not in self._sessions:
+                return False
+            if new_key in self._sessions:
+                raise AuthUnavailableError('Session token collision')
+            # Rotation preserves absolute expiry; it cannot extend stolen sessions forever.
+            self._sessions[new_key] = self._sessions.pop(key)
+            heapq.heappush(self._expiry, (self._sessions[new_key][1], new_key))
+            self._prune()
+            return True
+        elif operation == 'revoke':
+            keys = [k for k, (record, _) in self._sessions.items() if json.loads(record)['principal'] == value]
+            for k in keys:
+                del self._sessions[k]
+            self._prune()
+            return len(keys)
+        else:
+            raise ValueError('Unknown session operation')

@@ -34,7 +34,9 @@ async def _write_frame(writer, data, max_frame_size):
 class StdIoTransport:
 
     def __init__(self, *cmd: str, max_frame_size: int = 16 * 1024 * 1024,
-                 read_timeout=30.0, write_timeout=10.0, shutdown_timeout=5.0, kill_timeout=2.0):
+                 read_timeout=30.0, write_timeout=10.0, shutdown_timeout=5.0, kill_timeout=2.0, trusted_principal: str | None = None):
+        from wire_rpc.auth._util import identity
+        self._trusted_principal = None if trusted_principal is None else identity(trusted_principal)
         positive_limit("max_frame_size",max_frame_size)
         if not 0 < max_frame_size <= 0xFFFFFFFF:
             raise ValueError("Frame size must fit a positive 4-byte length")
@@ -71,6 +73,9 @@ class StdIoTransport:
         self.stdout = self.proc.stdout
         self.stderr = self.proc.stderr
         self._stderr_task = asyncio.create_task(self._drain_stderr())
+
+    async def get_principal(self, client_id=None) -> str | None:
+        return self._trusted_principal
 
     @property
     def max_message_size(self):
@@ -186,7 +191,9 @@ class StdIoTransport:
 
 class StdIoServerTransport:
 
-    def __init__(self, *, max_frame_size: int = 16 * 1024 * 1024, read_timeout=30.0, write_timeout=10.0):
+    def __init__(self, *, max_frame_size: int = 16 * 1024 * 1024, read_timeout=30.0, write_timeout=10.0, trusted_principal: str | None = None):
+        from wire_rpc.auth._util import identity
+        self._trusted_principal = None if trusted_principal is None else identity(trusted_principal)
         positive_limit("max_frame_size",max_frame_size)
         if not 0 < max_frame_size <= 0xFFFFFFFF:
             raise ValueError("Frame size must fit a positive 4-byte length")
@@ -218,6 +225,9 @@ class StdIoServerTransport:
             self._read_transport = None
             raise
         
+
+    async def get_principal(self, client_id=None) -> str | None:
+        return self._trusted_principal
 
     @property
     def max_message_size(self):
