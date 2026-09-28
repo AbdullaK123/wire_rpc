@@ -13,7 +13,7 @@ import ssl
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Self
+from typing import Generator, Self
 
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
@@ -75,7 +75,7 @@ def _ensure_not_idle(
 def _track_operation(
     inflight: set[asyncio.Task[object]],
     closing: bool,
-) -> Iterator[None]:
+) -> Generator[None]:
     if closing:
         raise ConnectionError("Transport is closing")
 

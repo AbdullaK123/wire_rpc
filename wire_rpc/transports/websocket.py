@@ -18,7 +18,16 @@ import aiohttp
 from aiohttp import web
 from wire_rpc.auth.protocol import Authenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports.errors import TransportError
 from wire_rpc.transports.protocol import StartupComponent
+
+def _decode_text_payload(data: bytes) -> str:
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        raise TransportError(
+            "Payload was not utf-8 encoded."
+        ) from exc
 
 
 class WsServerTransport:
@@ -27,16 +36,23 @@ class WsServerTransport:
         self, 
         host: str = "0.0.0.0", 
         port: int = 8000, 
+        max_msg_size: int = 4*1024*1024,
+        recv_queue_size: int = 1024,
+        write_timeout: float = 10.0,
         static_dir: str | None = None,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
+        self._write_timeout = write_timeout
         self._static_dir = static_dir
         self._auth = auth
+        self._max_msg_size = max_msg_size
         self._ws: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
-        self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue(
+            maxsize=recv_queue_size
+        )
         self._connected = asyncio.Event()
 
     async def startup(self):
@@ -68,12 +84,20 @@ class WsServerTransport:
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
 
+        if self._ws is not None:
+            raise TransportError("Client is already connected.")
+
         if self._auth:
             user_id = await self._auth.verify(request)
             if user_id is None:
                 raise web.HTTPUnauthorized(text="Invalid credentials")
 
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(
+            max_msg_size=self._max_msg_size,
+            heartbeat=30.0,
+            autoping=True,
+            autoclose=True
+        )
         await ws.prepare(request)
         self._ws = ws
         self._connected.set()
@@ -82,9 +106,9 @@ class WsServerTransport:
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    self._recv_queue.put_nowait(msg.data)
+                    await self._recv_queue.put(msg.data)
                 elif msg.type == aiohttp.WSMsgType.TEXT:
-                    self._recv_queue.put_nowait(msg.data.encode())
+                    await self._recv_queue.put(msg.data.encode('utf-8'))
         finally:
             self._ws = None
             logger.info("WebSocket client disconnected")
@@ -110,7 +134,8 @@ class WsServerTransport:
     async def send(self, data: bytes) -> None:
         if self._ws is None:
             raise ConnectionError("No WebSocket client connected")
-        await self._ws.send_str(data.decode())
+        async with asyncio.timeout(self._write_timeout):
+            await self._ws.send_str(_decode_text_payload(data))
 
     async def __aenter__(self) -> Self:
         # Don't await connect — run it as a background task
@@ -133,15 +158,22 @@ class MulticastWsServerTransport:
         self,
         host: str = "0.0.0.0",
         port: int = 8000,
+        max_msg_size: int = 4*1024*1024,
+        recv_queue_size: int = 1024,
+        write_timeout: float = 10.0,
+        max_connections: int = 1024,
         static_dir: str | None = None,
         auth: Authenticator | None = None
     ):
         self._host = host
         self._port = port
+        self._max_connections = max_connections
         self._static_dir = static_dir
+        self._max_msg_size = max_msg_size
+        self._write_timeout = write_timeout
         self._clients: dict[str, web.WebSocketResponse] = {}
         self._runner: web.AppRunner | None = None
-        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=recv_queue_size)
         self._auth = auth
 
     async def startup(self):
@@ -178,6 +210,9 @@ class MulticastWsServerTransport:
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
 
+        if len(self._clients) > self._max_connections:
+            raise TransportError("No connection slot available. Server is at max capacity.")
+
         client_id = str(uuid.uuid4())[:8]
 
         if self._auth:
@@ -186,7 +221,12 @@ class MulticastWsServerTransport:
                 raise web.HTTPUnauthorized(text="Invalid credentials")
             client_id = user_id
 
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(
+            max_msg_size=self._max_msg_size,
+            heartbeat=30.0,
+            autoping=True,
+            autoclose=True
+        )
         await ws.prepare(request)   
      
         self._clients[client_id] = ws
@@ -196,9 +236,9 @@ class MulticastWsServerTransport:
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    self._recv_queue.put_nowait((client_id, msg.data))
+                    await self._recv_queue.put((client_id, msg.data))
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    self._recv_queue.put_nowait((client_id, msg.data.encode()))
+                    await self._recv_queue.put((client_id, msg.data.encode()))
         finally:
             del self._clients[client_id]
             logger.info(f"Client {client_id} disconnected ({len(self._clients)} total)")
@@ -215,16 +255,18 @@ class MulticastWsServerTransport:
         if ws is None:
             raise ConnectionError(f"Client (id={client_id}) not connected")
 
-        await ws.send_str(data.decode())
+        async with asyncio.timeout(self._write_timeout):
+            await ws.send_str(_decode_text_payload(data))
 
     async def broadcast(self, data: bytes):
 
-        msg = data.decode()
+        msg = _decode_text_payload(data)
         dead: list[str] = []
 
         for client_id, ws in self._clients.items():
             try:
-                await ws.send_str(msg)
+                async with asyncio.timeout(self._write_timeout):
+                    await ws.send_str(msg)
             except (ConnectionError, ConnectionResetError):
                 dead.append(client_id)
 
@@ -264,18 +306,26 @@ class MulticastWsServerTransport:
             
 class WsClientTransport:
 
-    def __init__(self, url: str = "ws://localhost:8000/ws"):
+    def __init__(
+        self, 
+        url: str = "ws://localhost:8000/ws",
+        receive_timeout: float = 10.0,
+        close_timeout: float = 10.0
+    ):
         self._url = url
+        self._receive_timeout = receive_timeout
+        self._close_timeout = close_timeout
         self._session: aiohttp.ClientSession | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def connect(self):
         self._session = aiohttp.ClientSession()
-        self._ws = await self._session.ws_connect(self._url)
+        self._ws = await self._session.ws_connect(url=self._url)
 
     async def close(self):
         if self._ws:
-            await self._ws.close()
+            async with asyncio.timeout(self._close_timeout):
+                await self._ws.close()
             self._ws = None
         if self._session:
             await self._session.close()
@@ -284,11 +334,14 @@ class WsClientTransport:
     async def recv(self) -> bytes:
         if self._ws is None:
             raise ConnectionError("Not connected")
-        msg = await self._ws.receive()
+        async with asyncio.timeout(self._receive_timeout):
+            msg = await self._ws.receive()
         if msg.type == aiohttp.WSMsgType.BINARY:
             return msg.data
         elif msg.type == aiohttp.WSMsgType.TEXT:
-            return msg.data.encode()
+            return msg.data.encode('utf-8')
+        elif msg.type == aiohttp.WSMsgType.ERROR:
+            raise ConnectionError(f"WebSocket error: {self._ws.exception()}")
         elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
             raise ConnectionError("WebSocket closed")
         else:
