@@ -70,6 +70,8 @@ async def test_corrupt_session_payload_cannot_be_treated_as_authenticated_identi
         await store.validate(token)
 
 
+@pytest.mark.integration
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize('stores', ['redis'], indirect=True)
 async def test_redis_record_without_expiry_index_never_becomes_a_permanent_session(stores):
     from wire_rpc.auth.sessions import RedisSessionStore

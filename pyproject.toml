@@ -50,6 +50,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-timeout>=2.4.0",
+    "testcontainers[postgres,redis]==4.15.0",
 ]
 
 [tool.pytest.ini_options]
@@ -57,6 +58,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 10
+markers = ["integration: requires Docker; starts isolated PostgreSQL/Redis containers"]
 
 [tool.pyright]
 include = ["wire_rpc", "tests", "scripts"]

@@ -1,12 +1,33 @@
-import os
 import uuid
+from collections.abc import Iterator
+from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.redis import RedisContainer
 import pytest
 from wire_rpc.auth.sessions import InMemorySessionStore, SQLiteSessionStore, RedisSessionStore, PostgresSessionStore
 
 
-@pytest.fixture(params=['memory', 'sqlite', 'redis', 'postgres'])
+@pytest.fixture(scope='session')
+def redis_url() -> Iterator[str]:
+    with RedisContainer('redis:7') as container:
+        host = container.get_container_host_ip()
+        if ':' in host:
+            host = f'[{host}]'
+        yield f'redis://{host}:{container.get_exposed_port(6379)}/0'
+
+
+@pytest.fixture(scope='session')
+def postgres_dsn() -> Iterator[str]:
+    with PostgresContainer('postgres:17', driver=None) as container:
+        yield container.get_connection_url()
+
+
+@pytest.fixture(params=[
+    'memory', 'sqlite',
+    pytest.param('redis', marks=[pytest.mark.integration, pytest.mark.timeout(180)]),
+    pytest.param('postgres', marks=[pytest.mark.integration, pytest.mark.timeout(180)]),
+])
 async def stores(request, tmp_path):
-    """Two independent adapters sharing canonical state; services are mandatory when configured."""
+    """Two independent adapters sharing canonical state; containers are mandatory for shared backends."""
     kind = request.param
     first: InMemorySessionStore | SQLiteSessionStore | RedisSessionStore | PostgresSessionStore
     second: InMemorySessionStore | SQLiteSessionStore | RedisSessionStore | PostgresSessionStore
@@ -23,9 +44,7 @@ async def stores(request, tmp_path):
         finally:
             await first.shutdown(); await second.shutdown()
     elif kind == 'redis':
-        url = os.getenv('WIRE_TEST_REDIS_URL')
-        if not url:
-            pytest.skip('Set WIRE_TEST_REDIS_URL to run real Redis contracts')
+        url = request.getfixturevalue('redis_url')
         from redis.asyncio import Redis
         client = Redis.from_url(url, socket_timeout=5)
         first = RedisSessionStore(client, namespace=namespace, max_sessions=2)
@@ -33,19 +52,21 @@ async def stores(request, tmp_path):
         try:
             yield first, second
         finally:
-            await client.delete(*first._keys)
-            await client.aclose()
+            try:
+                await client.delete(*first._keys)
+            finally:
+                await client.aclose()
     else:
-        url = os.getenv('WIRE_TEST_POSTGRES_DSN')
-        if not url:
-            pytest.skip('Set WIRE_TEST_POSTGRES_DSN to run real PostgreSQL contracts')
+        url = request.getfixturevalue('postgres_dsn')
         import asyncpg
         pool = await asyncpg.create_pool(url, min_size=1, max_size=4, command_timeout=5)
         first = PostgresSessionStore(pool, namespace=namespace, max_sessions=2)
         second = PostgresSessionStore(pool, namespace=namespace, max_sessions=2)
-        await first.startup(); await second.startup()
         try:
+            await first.startup(); await second.startup()
             yield first, second
         finally:
-            await pool.execute('DELETE FROM wire_rpc_sessions WHERE namespace=$1', namespace)
-            await pool.close()
+            try:
+                await pool.execute('DELETE FROM wire_rpc_sessions WHERE namespace=$1', namespace)
+            finally:
+                await pool.close()

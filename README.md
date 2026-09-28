@@ -5,7 +5,10 @@ WebSocket, and stdio transports.
 
 ## Development and release checks
 
-Requires Python 3.12 or newer and uv.
+Requires Python 3.12 or newer, uv, and a running Docker daemon for the full suite.
+Testcontainers starts isolated PostgreSQL 17 and Redis 7 services automatically.
+Missing Docker or a failed container startup fails the tests; no backend is silently skipped.
+To explicitly run only tests without Docker: `uv run --locked pytest -q -W error -m "not integration"`.
 
 ```sh
 uv sync --locked

@@ -194,16 +194,19 @@ must provision them first). No backend silently opens or closes an injected pool
 uv run --locked mypy
 uv run --locked pyright
 uv run --locked pytest -q -W error
-# For real shared-backend tests, configure isolated test services:
-WIRE_TEST_REDIS_URL=redis://localhost:6379/0 \
-WIRE_TEST_POSTGRES_DSN=postgresql://user:password@localhost/test_db \
-uv run --locked pytest -q tests/auth -W error
+# Run only the Docker-backed cases:
+uv run --locked pytest -q -W error -m integration
 ```
 
-The CI shared-session job provisions real Redis 7 and PostgreSQL 17. Without those
-environment variables, local shared-backend cases explicitly skip. The platform
-matrix still exercises SQLite, memory, validators, TLS, real sockets, and lifecycle
-failures. No timing threshold is used to prove password-work parity; cancellation
+The full suite requires a running Docker daemon. Session-scoped Testcontainers
+fixtures start PostgreSQL 17 and Redis 7 on dynamically assigned ports, wait for
+readiness, and remove the containers afterward. Each test uses a unique namespace.
+No service URLs or pre-provisioned databases are needed. Startup failures fail the
+suite instead of skipping authentication contracts. The Linux CI job runs the full
+suite with Docker; the platform matrix explicitly selects `-m "not integration"`.
+Container-backed tests allow 180 seconds for cold image pulls and setup; other
+tests retain the 10-second deadlock guard.
+No timing threshold is used to prove password-work parity; cancellation
 and mutation tests use controlled events or atomic backend outcomes.
 
 From code, the security regression traces are:
