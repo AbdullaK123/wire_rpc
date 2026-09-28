@@ -1,5 +1,5 @@
 import asyncio
-from typing import Self
+from typing import Any, Self
 import sys
 
 from wire_rpc.transports.errors import InvalidFrameSizeError
@@ -46,10 +46,10 @@ class StdIoTransport:
             positive_timeout(name,value)
         self._read_timeout, self._write_timeout = read_timeout, write_timeout
         self._shutdown_timeout, self._kill_timeout = shutdown_timeout, kill_timeout
-        self._stderr_task = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self._stderr_bytes = 0
         self._close_lock = asyncio.Lock()
-        self._operations = set()
+        self._operations: set[asyncio.Task[Any]] = set()
         self._closing = False
         self._cmd = cmd
         self.proc: asyncio.subprocess.Process | None = None
@@ -80,12 +80,17 @@ class StdIoTransport:
     def stats(self):
         return {'stderr_bytes_discarded':self._stderr_bytes}
 
-    async def _drain_stderr(self):
-        while chunk := await self.stderr.read(65536):
+    async def _drain_stderr(self) -> None:
+        stderr = self.stderr
+        if stderr is None:
+            return
+        while chunk := await stderr.read(65536):
             self._stderr_bytes += len(chunk)
 
     @staticmethod
-    async def _discard(reader):
+    async def _discard(reader: asyncio.StreamReader | None):
+        if reader is None:
+            return
         while await reader.read(65536):
             pass
 
@@ -124,9 +129,9 @@ class StdIoTransport:
                     proc.kill()
                     async with asyncio.timeout(self._kill_timeout):
                         await proc.wait()
-                for task in (drain, self._stderr_task):
-                    if task is not None:
-                        task.cancel()
+                for drain_task in (drain, self._stderr_task):
+                    if drain_task is not None:
+                        drain_task.cancel()
                 await asyncio.gather(drain, *([self._stderr_task] if self._stderr_task else []), return_exceptions=True)
                 self.stdin = self.stdout = self.stderr = self.proc = None
                 self._stderr_task = None
@@ -139,13 +144,15 @@ class StdIoTransport:
         if self._closing:
             raise ConnectionError('Transport closed')
         task = asyncio.current_task()
-        self._operations.add(task)
+        if task is not None:
+            self._operations.add(task)
         try:
             async with self._read_lock:
                 async with asyncio.timeout(self._read_timeout):
                     return await _read_frame(self.stdout, self.stdin, self._max_frame_size)
         finally:
-            self._operations.discard(task)
+            if task is not None:
+                self._operations.discard(task)
 
     async def send(self, data: bytes) -> None:
 
@@ -155,13 +162,15 @@ class StdIoTransport:
         if self._closing:
             raise ConnectionError('Transport closed')
         task = asyncio.current_task()
-        self._operations.add(task)
+        if task is not None:
+            self._operations.add(task)
         try:
             async with self._write_lock:
                 async with asyncio.timeout(self._write_timeout):
                     await _write_frame(self.stdin, data, self._max_frame_size)
         finally:
-            self._operations.discard(task)
+            if task is not None:
+                self._operations.discard(task)
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -184,7 +193,7 @@ class StdIoServerTransport:
         positive_timeout('read_timeout',read_timeout)
         positive_timeout('write_timeout',write_timeout)
         self._read_timeout, self._write_timeout = read_timeout, write_timeout
-        self._read_transport = None
+        self._read_transport: asyncio.ReadTransport | None = None
         self._max_frame_size = max_frame_size
         self._read_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()

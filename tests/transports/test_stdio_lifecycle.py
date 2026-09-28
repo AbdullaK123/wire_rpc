@@ -8,6 +8,7 @@ async def test_child_filling_stderr_cannot_deadlock_rpc_output():
     transport = StdIoTransport(sys.executable,'-c',script)
     async with transport:
         assert await transport.recv() == b'ok', 'a noisy subprocess must not deadlock RPC by filling its stderr pipe'
+        assert transport.proc is not None, "connected stdio must retain its child handle so shutdown can reap it"
         await transport.proc.wait()
     assert transport.proc is None, 'process handles must be released after normal exit and repeated close'
     assert transport.stats['stderr_bytes_discarded'] == 2*1024*1024, 'stderr draining must discard bytes instead of accumulating unbounded logs'
@@ -39,7 +40,10 @@ async def test_close_escalates_to_termination_when_child_ignores_stdin_eof(monke
     real_timeout = asyncio.timeout
     monkeypatch.setattr(asyncio, 'timeout', lambda delay: ImmediateTimeout() if delay == 7 else real_timeout(delay))
     transport = StdIoTransport('unused',shutdown_timeout=7)
-    process = Process(); transport.proc = process; transport.stdin = Pipe(); transport.stdout = Reader()
+    process = Process()
+    monkeypatch.setattr(transport, 'proc', process)
+    monkeypatch.setattr(transport, 'stdin', Pipe())
+    monkeypatch.setattr(transport, 'stdout', Reader())
     await transport.close()
     assert process.terminated, 'a child ignoring graceful shutdown must receive termination instead of hanging the parent forever'
     assert transport.proc is None, 'termination must release the process even when no stderr task was started'

@@ -26,3 +26,8 @@ class RawWireRequest(Struct):
     id: Annotated[str, Meta(max_length=255)] | Annotated[int, Meta(ge=-(2**63), le=2**63-1)] | None | UnsetType = UNSET
     params: Optional[Any] = None
     jsonrpc: Literal["2.0"] = "2.0"
+
+    @property
+    def response_id(self) -> str | int | None:
+        """Normalize notification IDs for internal response construction."""
+        return None if isinstance(self.id, UnsetType) else self.id

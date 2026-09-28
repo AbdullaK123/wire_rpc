@@ -145,7 +145,7 @@ class MulticastApp:
             logger.warning("RPC method not found")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
-                id=request.id,
+                id=request.response_id,
             )
 
         handler = self._handlers[request.method]
@@ -158,7 +158,7 @@ class MulticastApp:
             except CodecConversionError:
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
-                    id=request.id,
+                    id=request.response_id,
                 )
 
         async def call_handler(
@@ -177,7 +177,7 @@ class MulticastApp:
             if spec.return_type is not None:
                 result = self._codec.convert(result, spec.return_type)
 
-            return WireSuccessResponse(result=result, id=req.id)
+            return WireSuccessResponse(result=result, id=req.response_id)
 
         # Build chain: app middleware → router middleware → handler
         chain = call_handler

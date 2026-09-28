@@ -28,6 +28,7 @@ async def test_authenticated_peer_survives_handler_and_encoding_failures_without
     async def identity(ctx):
         return current_request().principal
     task = asyncio.create_task(app._run()); await ready.wait()
+    assert transport._server is not None, "the TCP listener must bind before exercising network failure paths"
     port = transport._server.sockets[0].getsockname()[1]
     client = Client(TcpClientTransport(host='127.0.0.1',port=port,keep_alive=None,auth=auth),codec=codec_factory())
     try:

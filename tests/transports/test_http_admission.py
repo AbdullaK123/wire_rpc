@@ -1,3 +1,4 @@
+from tests.helpers import UnusedAuthenticator
 import asyncio
 
 import pytest
@@ -10,7 +11,7 @@ async def test_capacity_is_reserved_before_authentication_await(request_factory)
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    class Auth:
+    class Auth(UnusedAuthenticator):
         async def verify(self, request):
             entered.set()
             await release.wait()

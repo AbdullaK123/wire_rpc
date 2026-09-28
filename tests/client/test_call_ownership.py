@@ -1,10 +1,11 @@
+from tests.helpers import UnusedTransport
 import asyncio
 import pytest
 from wire_rpc.client import Client
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 
 
-class Peer:
+class Peer(UnusedTransport):
     def __init__(self):
         self.codec = MsgSpecJsonCodec()
         self.sent = []

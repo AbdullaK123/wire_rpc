@@ -361,10 +361,6 @@ class TcpServerTransport:
                 logger.error("Idle timeout")
                 await connection.close()
                 raise
-            except asyncio.TimeoutError:
-                logger.error("Write timeout")
-                await connection.close()
-                raise
 
     async def __aenter__(self) -> Self:
         await self._start()
@@ -529,10 +525,6 @@ class TcpClientTransport:
                 logger.error("Idle timeout")
                 await connection.close()
                 raise
-            except asyncio.TimeoutError:
-                logger.error("Write timeout")
-                await connection.close()
-                raise
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -607,7 +599,7 @@ class TcpMulticastServerTransport:
         self._clients: dict[str, TcpConnection] = {}
         if max_frame_size > max_queue_bytes:
             raise ValueError('A frame must fit the queue byte budget')
-        self._recv_queue = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
+        self._recv_queue: PayloadQueue[tuple[str, bytes]] = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
         self._server: asyncio.Server | None = None
         self._closing = False
         self._inflight: set[asyncio.Task[object]] = set()
@@ -789,6 +781,8 @@ class TcpMulticastServerTransport:
         return {**self._recv_queue.stats, 'connections': len(self._clients)}
 
     async def get_principal(self, client_id=None):
+        if client_id is None:
+            raise PermissionError('Peer disconnected')
         connection = self._clients.get(client_id)
         if connection is None or connection.writer.is_closing():
             raise PermissionError('Peer disconnected')
@@ -830,18 +824,6 @@ class TcpMulticastServerTransport:
                 logger.warning(
                     f"Client (id={client_id}) reached idle timeout. "
                     "Disconnecting"
-                )
-                raise
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"Client (id={client_id}) timed out on write. "
-                    "Disconnecting..."
-                )
-                self._clients.pop(client_id, None)
-                await connection.close()
-                logger.info(
-                    f"Client {client_id} disconnected "
-                    f"({len(self._clients)} total)"
                 )
                 raise
 

@@ -1,3 +1,4 @@
+from tests.helpers import UnusedTransport, response_bytes
 import random
 import pytest
 from wire_rpc import App
@@ -8,7 +9,7 @@ from wire_rpc.codecs.pydantic import PydanticCodec
 
 @pytest.mark.parametrize('factory',[MsgSpecJsonCodec,MsgSpecMsgPackCodec,PydanticCodec])
 async def test_seeded_garbage_and_truncations_cannot_escape_public_request_errors(factory):
-    codec=factory(); app=App(object(),codec=codec); calls=[]
+    codec=factory(); app=App(UnusedTransport(),codec=codec); calls=[]
     @app.method('mutate')
     async def mutate(ctx):
         calls.append('mutation')

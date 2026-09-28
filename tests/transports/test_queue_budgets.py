@@ -4,7 +4,7 @@ from wire_rpc.transports._queue import PayloadQueue
 
 
 async def test_byte_budget_blocks_payload_even_when_message_slots_are_free():
-    queue = PayloadQueue(100,max_bytes=4,per_peer=10)
+    queue: PayloadQueue[tuple[str, bytes]] = PayloadQueue(100,max_bytes=4,per_peer=10)
     await queue.put(('a',b'1234'))
     entered = asyncio.Event()
     async def put():
@@ -18,7 +18,7 @@ async def test_byte_budget_blocks_payload_even_when_message_slots_are_free():
 
 
 async def test_noisy_peer_cannot_occupy_other_peers_admission_slots():
-    queue = PayloadQueue(100,max_bytes=100,per_peer=1)
+    queue: PayloadQueue[tuple[str, bytes]] = PayloadQueue(100,max_bytes=100,per_peer=1)
     await queue.put(('a',b'a'))
     entered = asyncio.Event()
     async def put():
@@ -31,7 +31,7 @@ async def test_noisy_peer_cannot_occupy_other_peers_admission_slots():
 
 
 async def test_close_wakes_blocked_producers_and_consumers():
-    full = PayloadQueue(1,max_bytes=1,per_peer=1); empty = PayloadQueue()
+    full: PayloadQueue[bytes] = PayloadQueue(1,max_bytes=1,per_peer=1); empty: PayloadQueue[bytes] = PayloadQueue()
     await full.put(b'x')
     put = asyncio.create_task(full.put(b'y')); get = asyncio.create_task(empty.get())
     full.close(); empty.close()

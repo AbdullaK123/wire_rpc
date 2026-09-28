@@ -130,7 +130,7 @@ class App:
             logger.warning("RPC method not found")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
-                id=request.id,
+                id=request.response_id,
             )
 
         handler = self._handlers[request.method]
@@ -143,7 +143,7 @@ class App:
             except CodecConversionError:
                 return WireErrorResponse(
                     error=InvalidParamsError("Invalid params"),
-                    id=request.id,
+                    id=request.response_id,
                 )
 
         async def call_handler(
@@ -158,7 +158,7 @@ class App:
             if spec.return_type is not None:
                 result = self._codec.convert(result, spec.return_type)
 
-            return WireSuccessResponse(result=result, id=req.id)
+            return WireSuccessResponse(result=result, id=req.response_id)
 
         # Build chain: app middleware → router middleware → handler
         chain = call_handler
@@ -223,8 +223,8 @@ class App:
                 try:
                     if response is not None:
                         await t.send(response)
-                    elif hasattr(t, 'finish_notification'):
-                        await t.finish_notification()
+                    elif (finish_notification := getattr(t, 'finish_notification', None)) is not None:
+                        await finish_notification()
                 except (ConnectionError, TimeoutError):
                     break
 

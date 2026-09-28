@@ -1,3 +1,4 @@
+from tests.helpers import listening_port
 """Adversarial checks against real sockets, without sleeps or fixed ports."""
 
 import asyncio
@@ -15,7 +16,7 @@ from wire_rpc.transports.websocket import MulticastWsServerTransport
 async def test_http_cancelled_dispatch_does_not_cross_wire_response_between_clients():
     transport = HttpServerTransport("127.0.0.1", 0)
     await transport.connect()
-    port = next(iter(transport._runner.sites))._server.sockets[0].getsockname()[1]
+    port = listening_port(transport._runner)
     try:
         async with aiohttp.ClientSession() as client:
             abandoned = asyncio.create_task(client.post(f"http://127.0.0.1:{port}/rpc", data=b"private"))

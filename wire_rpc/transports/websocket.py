@@ -3,6 +3,7 @@ import asyncio
 from pathlib import Path
 import ssl
 import uuid
+from typing import Any, Callable, cast
 
 import aiohttp
 from aiohttp import web
@@ -41,7 +42,7 @@ class _WsServer:
         self._allowed_origins = frozenset(allowed_origins or ())
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._auth_slots = ConnectionLimiter(16)
-        self._recv_queue = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
+        self._recv_queue: PayloadQueue[Any] = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
         self._runner = None
         self._ws = None
         self._clients = {}
@@ -231,7 +232,7 @@ class _WsServer:
         await self._start()
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
 
@@ -295,7 +296,10 @@ class WsClientTransport:
         try:
             async with asyncio.timeout(self._connect_timeout):
                 self._ws = await self._session.ws_connect(self._url, max_msg_size=self._max_msg_size,
-                    timeout=aiohttp.ClientWSTimeout(ws_close=self._close_timeout), compress=0)
+                    # aiohttp uses legacy attrs fields, whose generated constructor
+                    # Pyright cannot infer. Keep the actual runtime timeout type.
+                    timeout=cast(Callable[..., aiohttp.ClientWSTimeout], aiohttp.ClientWSTimeout)(
+                        ws_close=self._close_timeout), compress=0)
         except BaseException:
             await self.close()
             raise
@@ -334,7 +338,7 @@ class WsClientTransport:
         await self.connect()
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
 

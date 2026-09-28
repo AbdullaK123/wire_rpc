@@ -1,3 +1,4 @@
+from tests.helpers import UnusedAuthenticator
 import asyncio
 from unittest.mock import AsyncMock
 
@@ -8,7 +9,7 @@ from wire_rpc.transports.http import HttpServerTransport
 
 
 async def test_close_does_not_shutdown_owned_authentication_twice():
-    class Auth:
+    class Auth(UnusedAuthenticator):
         startup = AsyncMock()
         shutdown = AsyncMock()
         login = AsyncMock()

@@ -1,3 +1,4 @@
+from tests.helpers import UnusedAuthenticator
 import asyncio
 
 from wire_rpc.transports.tcp import TcpServerTransport
@@ -22,10 +23,10 @@ async def test_authentication_in_progress_reserves_the_only_connection_slot(writ
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    class Auth:
+    class Auth(UnusedAuthenticator):
         calls = 0
 
-        async def verify(self, connection):
+        async def verify(self, request):
             self.calls += 1
             entered.set()
             await release.wait()

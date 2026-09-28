@@ -46,9 +46,9 @@ class HttpServerTransport:
         positive_timeout('shutdown_timeout', shutdown_timeout)
         self._max_queue_bytes = max_queue_bytes
         self._queued_bytes = 0
-        self._principals = {}
-        self._active_principal = None
-        self._active_request = None
+        self._principals: dict[asyncio.Future[bytes | None], tuple[str | None, web.Request]] = {}
+        self._active_principal: str | None = None
+        self._active_request: web.Request | None = None
         self._shutdown_timeout = shutdown_timeout
         self._ssl = ssl_context
         self._allowed_origins = frozenset(allowed_origins or ())
@@ -59,10 +59,10 @@ class HttpServerTransport:
         self._max_pending_requests = max_pending_requests
         self._request_timeout = request_timeout
         self._max_body_size = max_body_size
-        self._queue: deque[tuple[bytes, asyncio.Future[bytes]]] = deque()
+        self._queue: deque[tuple[bytes, asyncio.Future[bytes | None]]] = deque()
         self._ready = asyncio.Event()
-        self._pending: set[asyncio.Future[bytes]] = set()
-        self._active: asyncio.Future[bytes] | None = None
+        self._pending: set[asyncio.Future[bytes | None]] = set()
+        self._active: asyncio.Future[bytes | None] | None = None
         self._receiving = False
         self._closing = False
         self._runner: web.AppRunner | None = None
@@ -80,11 +80,12 @@ class HttpServerTransport:
             raise RuntimeError("Transport already listening or closed")
         self._app = web.Application(client_max_size=self._max_body_size)
         self._app.router.add_post("/rpc", self._handle)
-        if self._auth:
+        auth = self._auth
+        if auth is not None:
             async def login(request):
-                return await self._auth_request(request, self._auth.login)
+                return await self._auth_request(request, auth.login)
             async def logout(request):
-                return await self._auth_request(request, self._auth.logout)
+                return await self._auth_request(request, auth.logout)
             self._app.router.add_post('/login', login)
             self._app.router.add_post('/logout', logout)
         self._runner = web.AppRunner(self._app, handler_cancellation=True, shutdown_timeout=self._shutdown_timeout)
@@ -117,7 +118,7 @@ class HttpServerTransport:
         origin = request.headers.get('Origin')
         if isinstance(origin, str) and origin not in self._allowed_origins:
             raise web.HTTPForbidden(text='Origin not allowed')
-        response = asyncio.get_running_loop().create_future()
+        response: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._pending.add(response)
         entry = None
         try:
@@ -246,8 +247,8 @@ class HttpClientTransport:
         self._url = url
         self._timeout = request_timeout
         self._max_body_size = max_body_size
-        self._session = None
-        self._pending = None
+        self._session: aiohttp.ClientSession | None = None
+        self._pending: aiohttp.ClientResponse | None = None
         self._sending = False
 
     async def connect(self):

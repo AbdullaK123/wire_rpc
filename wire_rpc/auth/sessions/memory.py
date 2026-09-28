@@ -15,7 +15,7 @@ class InMemorySessionStore:
         positive_timeout('ttl', ttl)
         positive_limit('max_sessions', max_sessions)
         self._sessions: dict[str, tuple[str, float]] = {}
-        self._expiry = []
+        self._expiry: list[tuple[float, str]] = []
         self._ttl, self._max_sessions = ttl, max_sessions
 
     def _prune(self):

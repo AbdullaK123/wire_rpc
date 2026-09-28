@@ -1,3 +1,4 @@
+from tests.helpers import listening_port
 import asyncio
 from pathlib import Path
 from wire_rpc.transports.websocket import MulticastWsServerTransport, WsClientTransport
@@ -10,7 +11,7 @@ async def test_repeated_socket_lifecycles_do_not_accumulate_tasks_or_file_descri
     for _ in range(20):
         server=MulticastWsServerTransport(host='127.0.0.1',port=0)
         await server.connect()
-        port=next(iter(server._runner.sites))._server.sockets[0].getsockname()[1]
+        port=listening_port(server._runner)
         client=WsClientTransport(f'ws://127.0.0.1:{port}/ws')
         try:
             await client.connect(); await client.send(b'queued and abandoned')

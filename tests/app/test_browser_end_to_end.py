@@ -1,3 +1,4 @@
+from tests.helpers import listening_port
 import asyncio
 import aiohttp
 import pytest
@@ -17,17 +18,19 @@ async def test_authenticated_browser_transport_preserves_identity_after_rejected
             pass
         async def logout(self,request):
             pass
+    transport: HttpServerTransport | MulticastWsServerTransport
+    app: App | MulticastApp
     if kind == 'http':
-        class Server(HttpServerTransport):
+        class HttpServer(HttpServerTransport):
             async def connect(self):
                 await super().connect(); ready.set()
-        transport=Server('127.0.0.1',0,auth=Auth())
+        transport=HttpServer('127.0.0.1',0,auth=Auth())
         app=App(transport)
     else:
-        class Server(MulticastWsServerTransport):
+        class WsServer(MulticastWsServerTransport):
             async def _start(self):
                 await super()._start(); ready.set()
-        transport=Server('127.0.0.1',0,auth=Auth())
+        transport=WsServer('127.0.0.1',0,auth=Auth())
         app=MulticastApp(transport)
     calls=[]
     @app.method('write')
@@ -35,7 +38,7 @@ async def test_authenticated_browser_transport_preserves_identity_after_rejected
         calls.append(params)
         return current_request().principal
     task=asyncio.create_task(app._run()); await ready.wait()
-    port=next(iter(transport._runner.sites))._server.sockets[0].getsockname()[1]
+    port=listening_port(transport._runner)
     wire=HttpClientTransport(f'http://127.0.0.1:{port}/rpc') if kind=='http' else WsClientTransport(f'ws://127.0.0.1:{port}/ws')
     client=Client(wire)
     try:
@@ -52,15 +55,15 @@ async def test_authenticated_browser_transport_preserves_identity_after_rejected
 
 async def test_http_notification_releases_its_response_slot_with_no_rpc_body():
     ready=asyncio.Event()
-    class Server(HttpServerTransport):
+    class HttpServer(HttpServerTransport):
         async def connect(self):
             await super().connect(); ready.set()
-    transport=Server('127.0.0.1',0); app=App(transport)
+    transport=HttpServer('127.0.0.1',0); app=App(transport)
     @app.method('notify')
     async def notify(ctx):
         return 'must not be returned'
     task=asyncio.create_task(app._run()); await ready.wait()
-    port=next(iter(transport._runner.sites))._server.sockets[0].getsockname()[1]
+    port=listening_port(transport._runner)
     try:
         async with aiohttp.ClientSession() as client:
             async with client.post(f'http://127.0.0.1:{port}/rpc',json={'jsonrpc':'2.0','method':'notify'}) as response:

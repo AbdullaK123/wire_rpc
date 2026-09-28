@@ -75,8 +75,11 @@ async def test_pending_authentication_counts_toward_connection_capacity(factory,
             return "user"
 
     auth = Auth()
-    kwargs = {"max_connections": 1} if factory is module.MulticastWsServerTransport else {}
-    transport = factory(auth=auth, **kwargs)
+    transport: module.MulticastWsServerTransport | module.WsServerTransport
+    if factory is module.MulticastWsServerTransport:
+        transport = module.MulticastWsServerTransport(auth=auth, max_connections=1)
+    else:
+        transport = module.WsServerTransport(auth=auth)
     first = asyncio.create_task(transport._handle_ws(Mock()))
     await entered.wait()
     second = asyncio.create_task(transport._handle_ws(Mock()))

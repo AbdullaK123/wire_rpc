@@ -26,6 +26,10 @@ jobs:
         run: python -m pip install uv==0.12.18
       - name: Install locked dependencies
         run: uv sync --locked --python ${{ matrix.python }}
+      - name: Mypy (including unannotated function bodies)
+        run: uv run --locked mypy
+      - name: Pyright (Pylance type checking)
+        run: uv run --locked pyright
       - name: Adversarial suite
         run: uv run --locked pytest -q -W error
       - name: Build distribution

@@ -20,6 +20,9 @@ build-backend = "hatchling.build"
 [tool.mypy]
 mypy_path = "."
 explicit_package_bases = true
+check_untyped_defs = true
+files = ["wire_rpc", "tests", "scripts"]
+python_version = "3.12"
 disable_error_code = ["import-untyped"]
 
 [[tool.mypy.overrides]]
@@ -31,6 +34,8 @@ ignore_missing_imports = true
 
 [dependency-groups]
 dev = [
+    "mypy==2.3.1",
+    "pyright==1.1.414",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-timeout>=2.4.0",
@@ -41,3 +46,8 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 10
+
+[tool.pyright]
+include = ["wire_rpc", "tests", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"

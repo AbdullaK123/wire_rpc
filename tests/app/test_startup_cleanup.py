@@ -1,3 +1,4 @@
+from tests.helpers import UnusedTransport, response_bytes
 import pytest
 from wire_rpc import App
 from wire_rpc.auth.cookie import CookieSessionAuth
@@ -6,11 +7,19 @@ from wire_rpc.auth.cookie import CookieSessionAuth
 async def test_partial_auth_startup_rolls_back_already_started_dependency_once():
     events=[]
     class Validator:
+        async def validate(self, credentials):
+            raise AssertionError('Failed startup must not admit credentials')
         async def startup(self):
             events.append('validator started')
         async def shutdown(self):
             events.append('validator stopped')
     class Sessions:
+        async def create(self, user_id, payload=None) -> str:
+            raise AssertionError('Failed startup must not create sessions')
+        async def validate(self, session_id) -> str | None:
+            raise AssertionError('Failed startup must not validate sessions')
+        async def destroy(self, session_id):
+            raise AssertionError('Failed startup must not mutate sessions')
         async def startup(self):
             raise RuntimeError('store unavailable')
         async def shutdown(self):
@@ -24,7 +33,7 @@ async def test_partial_auth_startup_rolls_back_already_started_dependency_once()
 
 async def test_failed_application_hook_still_releases_started_transport_dependencies():
     events=[]
-    class Transport:
+    class Transport(UnusedTransport):
         async def startup(self):
             events.append('start')
         async def shutdown(self):

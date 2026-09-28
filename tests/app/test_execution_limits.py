@@ -1,3 +1,4 @@
+from tests.helpers import UnusedTransport, response_bytes
 import asyncio
 import pytest
 from wire_rpc import App, MulticastApp
@@ -8,17 +9,23 @@ from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 async def test_one_peers_overlapping_requests_cannot_occupy_all_handler_slots():
     codec=MsgSpecJsonCodec(); first_entered=asyncio.Event(); other_served=asyncio.Event(); release=asyncio.Event()
     class Transport:
+        async def connect(self):
+            pass
+        async def close(self):
+            pass
+        async def broadcast(self, data: bytes):
+            raise AssertionError('Request isolation must not broadcast private responses')
         def __init__(self):
-            self.queue=asyncio.Queue(); self.sent=[]
+            self.queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(); self.sent=[]
         async def recv(self):
             return await self.queue.get()
-        async def send(self,key,data):
-            self.sent.append((key,codec.decode(data,dict)))
-            if key == 'b':
+        async def send(self,client_id,data):
+            self.sent.append((client_id,codec.decode(data,dict)))
+            if client_id == 'b':
                 other_served.set()
         async def __aenter__(self):
             return self
-        async def __aexit__(self,*args):
+        async def __aexit__(self,exc_type,exc_val,exc_tb):
             pass
     transport=Transport(); app=MulticastApp(transport,max_concurrency=2)
     @app.method('block')
@@ -48,15 +55,15 @@ async def test_handler_timeout_is_a_safe_request_error_and_context_is_released(m
     class Deadline:
         async def __aenter__(self):
             raise TimeoutError
-        async def __aexit__(self,*args):
+        async def __aexit__(self,exc_type,exc_val,exc_tb):
             pass
     monkeypatch.setattr(execution.asyncio,'timeout',lambda delay:Deadline())
-    codec=MsgSpecJsonCodec(); app=App(object())
+    codec=MsgSpecJsonCodec(); app=App(UnusedTransport())
     calls=[]
     @app.method('mutate')
     async def mutate(ctx):
         calls.append('side effect')
     data=codec.encode({'jsonrpc':'2.0','method':'mutate','id':1})
-    reply=codec.decode(await process(app,data,app._dispatch),dict)
+    reply=codec.decode(response_bytes(await process(app,data,app._dispatch)),dict)
     assert reply['error']['code'] == -32000, 'execution deadline exhaustion must return a controlled failure without leaking internals'
     assert calls == [] and app.stats['active'] == 0, 'a deadline reached before dispatch must not execute the handler or leak admission'

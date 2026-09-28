@@ -7,7 +7,7 @@ from msgspec import UNSET
 
 from wire_rpc.codecs import CodecError
 from wire_rpc.context import RequestContext, _request_context
-from wire_rpc.errors import InternalError, InvalidRequestError, ParseError, ServerError
+from wire_rpc.errors import InternalError, InvalidRequestError, ParseError, ServerError, WireError
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse
 
@@ -47,7 +47,7 @@ async def process(app, data: bytes, dispatch: Callable[[RawWireRequest], Awaitab
         return codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
 
     notification = request.id is UNSET
-    response_id = None if notification else request.id
+    response_id = request.response_id
     stats.active += 1
     token = None
     try:
@@ -67,6 +67,7 @@ async def process(app, data: bytes, dispatch: Callable[[RawWireRequest], Awaitab
         raise
     except Exception as exc:
         stats.failed += 1
+        error: WireError
         if isinstance(exc, TimeoutError):
             stats.timed_out += 1
             error = ServerError(message='Request deadline exceeded', code=-32000)

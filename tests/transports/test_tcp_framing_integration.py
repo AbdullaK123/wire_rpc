@@ -15,6 +15,7 @@ from wire_rpc.transports.websocket import MulticastWsServerTransport
 async def test_tcp_oversized_header_disconnects_peer_without_waiting_for_body():
     transport = TcpMulticastServerTransport(host="127.0.0.1", port=0, max_frame_size=8, keep_alive=None)
     await transport.connect()
+    assert transport._server is not None, "the TCP listener must bind before exercising network failure paths"
     port = transport._server.sockets[0].getsockname()[1]
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     try:

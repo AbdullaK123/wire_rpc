@@ -4,16 +4,16 @@ from collections import deque, Counter
 from wire_rpc._validation import positive_limit
 
 
-class PayloadQueue:
+class PayloadQueue[T: bytes | tuple[str, bytes]]:
     def __init__(self, maxsize=256, *, max_bytes=64 * 1024 * 1024, per_peer=16):
         for name, value in [('maxsize',maxsize),('max_bytes',max_bytes),('per_peer',per_peer)]:
             positive_limit(name, value)
         self.maxsize = maxsize
         self.max_bytes = max_bytes
         self.per_peer = per_peer
-        self._items = deque()
+        self._items: deque[T] = deque()
         self._bytes = 0
-        self._counts = Counter()
+        self._counts: Counter[str | None] = Counter()
         self._changed = asyncio.Event()
         self._closed = False
 
@@ -25,10 +25,10 @@ class PayloadQueue:
         return len(self._items)
 
     @staticmethod
-    def _parts(item):
+    def _parts(item: bytes | tuple[str, bytes]) -> tuple[str | None, bytes]:
         return item if isinstance(item, tuple) else (None, item)
 
-    async def put(self, item):
+    async def put(self, item: T) -> None:
         peer, data = self._parts(item)
         size = len(data)
         if size > self.max_bytes:
@@ -46,7 +46,7 @@ class PayloadQueue:
             self._changed.clear()
             await self._changed.wait()
 
-    async def get(self):
+    async def get(self) -> T:
         while True:
             if self._closed:
                 raise ConnectionError('Receive queue closed')
@@ -63,7 +63,7 @@ class PayloadQueue:
             await self._changed.wait()
 
     def drop_peer(self, peer):
-        remaining = deque()
+        remaining: deque[T] = deque()
         for item in self._items:
             item_peer, data = self._parts(item)
             if item_peer == peer:

@@ -9,10 +9,19 @@ Requires Python 3.12 or newer and uv.
 
 ```sh
 uv sync --locked
+uv run --locked mypy
+uv run --locked pyright
 uv run --locked pytest -q -W error
 uv build --no-sources
 uv run --locked python scripts/check_wheel.py
 ```
+
+Mypy checks function bodies even when signatures are unannotated. Pyright runs
+in standard mode with a Python 3.12 language baseline. Both check the package,
+tests, and release scripts, and both run in CI. In VS Code, select the project's
+`.venv` interpreter so Pylance resolves the same installed dependencies; it reads
+the shared `[tool.pyright]` configuration. Pylance's editor extension itself is
+not run by CI.
 
 Tests are organized by attack surface. Concurrency tests use events and
 controlled ordering; socket tests use ephemeral ports. Test timeouts are

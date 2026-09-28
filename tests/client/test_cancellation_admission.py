@@ -1,3 +1,4 @@
+from tests.helpers import UnusedTransport
 import asyncio
 import pytest
 from wire_rpc import Client
@@ -6,7 +7,7 @@ from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 
 async def test_cancelled_lock_waiter_does_not_close_the_active_call():
     codec=MsgSpecJsonCodec(); entered=asyncio.Event(); release=asyncio.Event()
-    class Peer:
+    class Peer(UnusedTransport):
         closed=False
         async def send(self,data):
             self.request=codec.decode(data,dict); entered.set(); await release.wait()

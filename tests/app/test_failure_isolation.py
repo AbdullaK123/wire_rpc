@@ -1,3 +1,4 @@
+from tests.helpers import UnusedTransport, response_bytes
 import asyncio
 import pytest
 from wire_rpc import App, MulticastApp, current_request
@@ -30,17 +31,18 @@ async def test_unserializable_result_returns_safe_error_and_next_request_still_r
 
 
 async def test_handler_exception_never_returns_secret_bearing_exception_text(codec):
-    app = App(object(), codec=codec)
+    app = App(UnusedTransport(), codec=codec)
     @app.method('secret')
     async def secret(ctx):
         raise RuntimeError('postgres://admin:VERY_SECRET@internal/db')
     payload = await process(app, codec.encode({'jsonrpc':'2.0','method':'secret','id':'a'}), app._dispatch)
+    payload = response_bytes(payload)
     assert b'VERY_SECRET' not in payload, 'database credentials inside exceptions must never cross the public RPC boundary'
     assert codec.decode(payload, dict)['error']['data'] is None, 'internal diagnostics must not be copied into public error data'
 
 
 async def test_null_required_params_do_not_reach_handler_side_effects(codec):
-    app = App(object(), codec=codec); calls = []
+    app = App(UnusedTransport(), codec=codec); calls = []
     @app.method('write')
     async def write(params: dict, ctx):
         calls.append(params)
@@ -50,7 +52,7 @@ async def test_null_required_params_do_not_reach_handler_side_effects(codec):
 
 
 async def test_notification_handler_failure_does_not_emit_an_unowned_reply(codec):
-    app = App(object(), codec=codec)
+    app = App(UnusedTransport(), codec=codec)
     @app.method('notify')
     async def notify(ctx):
         raise RuntimeError('secret')
