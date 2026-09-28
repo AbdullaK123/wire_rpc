@@ -8,12 +8,12 @@ WebSocket, and stdio transports.
 Requires Python 3.12 or newer and uv.
 
 ```sh
-uv sync --locked
-uv run --locked mypy
-uv run --locked pyright
-uv run --locked pytest -q -W error
+uv sync --locked --all-extras
+uv run --locked --all-extras mypy
+uv run --locked --all-extras pyright
+uv run --locked --all-extras pytest -q -W error
 uv build --no-sources
-uv run --locked python scripts/check_wheel.py
+uv run --locked --all-extras python scripts/check_wheel.py
 ```
 
 Mypy checks function bodies even when signatures are unannotated. Pyright runs
@@ -34,3 +34,8 @@ cancellation semantics, resource budgets, and platform limitations.
 The [execution plan](docs/production_readiness_plan.md) records the follow-up
 hardening work. The [initial review](docs/transport_codec_hardening_review.md)
 records the first transport/codec regression pass.
+
+The [authentication suite](docs/authentication.md) documents authenticators,
+credential validators, session backends, client credentials, TLS policy, and
+adversarial backend tests. Optional extras are `password`, `jwt`, `redis`, and
+`postgres`; core imports do not require them.

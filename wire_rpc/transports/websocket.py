@@ -1,11 +1,15 @@
+from wire_rpc.auth.protocol import InteractiveAuthenticator
+from wire_rpc.auth.errors import AuthUnavailableError
 """Bounded browser-oriented WebSocket transports with explicit ownership."""
 import asyncio
 from pathlib import Path
 import ssl
 import uuid
 from typing import Any, Callable, cast
+from collections.abc import Mapping
 
 import aiohttp
+from aiohttp.abc import AbstractCookieJar
 from aiohttp import web
 
 from wire_rpc._validation import positive_limit, positive_timeout
@@ -89,7 +93,7 @@ class _WsServer:
             raise RuntimeError('Transport is closed or already listening')
         app = web.Application(client_max_size=self._max_msg_size)
         app.router.add_get('/ws', self._handle_ws)
-        if self._auth:
+        if isinstance(self._auth, InteractiveAuthenticator):
             async def login(request):
                 return await self._auth_request(request, self._auth.login)
             async def logout(request):
@@ -133,6 +137,8 @@ class _WsServer:
             try:
                 async with asyncio.timeout(self._auth_timeout):
                     principal = await self._auth.verify(request)
+            except AuthUnavailableError:
+                raise web.HTTPServiceUnavailable(text='Authentication unavailable') from None
             except TimeoutError:
                 raise web.HTTPGatewayTimeout(text='Authentication timed out') from None
             if principal is None:
@@ -278,24 +284,37 @@ class WsClientTransport:
     requires_text_codec = True
 
     def __init__(self, url='ws://localhost:8000/ws', receive_timeout=10.0, close_timeout=5.0,
-                 *, connect_timeout=10.0, write_timeout=10.0, max_msg_size=1024*1024):
+                 *, connect_timeout=10.0, write_timeout=10.0, max_msg_size=1024*1024,
+                 headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,
+                 ssl_context: ssl.SSLContext | None = None, allow_insecure_credentials: bool = False):
         for name,value in [('receive_timeout',receive_timeout),('close_timeout',close_timeout),
                            ('connect_timeout',connect_timeout),('write_timeout',write_timeout)]:
             positive_timeout(name,value)
         positive_limit('max_msg_size',max_msg_size)
+        from wire_rpc.auth.client import validate_client_credentials
+        validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure_credentials)
+        self._headers = dict(headers or {})
+        self._cookie_jar, self._ssl_context = cookie_jar, ssl_context
         self._url = url
         self._receive_timeout, self._close_timeout = receive_timeout, close_timeout
         self._connect_timeout, self._write_timeout = connect_timeout, write_timeout
         self._max_msg_size = max_msg_size
-        self._session = self._ws = None
+        self._session: aiohttp.ClientSession | None = None
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def connect(self):
         if self._session is not None:
             raise RuntimeError('Already connected')
-        self._session = aiohttp.ClientSession()
+        trace = aiohttp.TraceConfig()
+        async def reject_redirect(session, context, params):
+            params.response.close()
+            raise ConnectionError('WebSocket redirects are disabled to protect credentials')
+        trace.on_request_redirect.append(reject_redirect)
+        self._session = aiohttp.ClientSession(headers=self._headers, cookie_jar=self._cookie_jar, trace_configs=[trace])
         try:
             async with asyncio.timeout(self._connect_timeout):
                 self._ws = await self._session.ws_connect(self._url, max_msg_size=self._max_msg_size,
+                    ssl=self._ssl_context if self._ssl_context is not None else True,
                     # aiohttp uses legacy attrs fields, whose generated constructor
                     # Pyright cannot infer. Keep the actual runtime timeout type.
                     timeout=cast(Callable[..., aiohttp.ClientWSTimeout], aiohttp.ClientWSTimeout)(

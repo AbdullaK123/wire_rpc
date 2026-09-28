@@ -15,7 +15,7 @@ async def test_authenticated_peer_survives_handler_and_encoding_failures_without
     class Server(TcpMulticastServerTransport):
         async def connect(self):
             await super().connect(); ready.set()
-    auth = auth_factory('a-long-test-only-secret')
+    auth = auth_factory('a-long-test-only-secret', principal='test-service')
     transport = Server(host='127.0.0.1',port=0,keep_alive=None,auth=auth,shutdown_timeout=0.1)
     app = MulticastApp(transport,codec=codec_factory())
     @app.method('fail')
@@ -39,7 +39,7 @@ async def test_authenticated_peer_survives_handler_and_encoding_failures_without
                 await client.call(method,str)
             assert error.value.code == -32603 and error.value.data is None, 'handler/codec failures must produce sanitized request-local errors over real TCP'
         principal = await client.call('identity',str)
-        assert principal.startswith('127.0.0.1:'), 'the authenticated identity must survive transport dispatch without using caller-controlled params'
+        assert principal == 'test-service', 'the authenticated identity must survive transport dispatch without using caller-controlled params'
         assert app.stats['active'] == 0, 'failed RPC work must release execution accounting for subsequent calls'
     finally:
         await client.close(); await app.stop(); await task

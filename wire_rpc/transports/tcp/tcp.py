@@ -17,7 +17,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Generator, Self
 
-from wire_rpc.auth.protocol import Authenticator
+from wire_rpc.auth.protocol import Authenticator, ClientAuthenticator
+from wire_rpc.auth.errors import AuthUnavailableError
 from wire_rpc.logger import logger
 from wire_rpc.transports.errors import IdleTimeoutError, InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
@@ -257,8 +258,8 @@ class TcpServerTransport:
             self._connected.set()
             logger.info(f"TCP client connected from {addr}")
 
-        except asyncio.TimeoutError:
-            logger.warning("Authentication timeout")
+        except (asyncio.TimeoutError, AuthUnavailableError):
+            logger.warning("Authentication unavailable")
         finally:
             if reserved:
                 self._accepting = False
@@ -306,6 +307,15 @@ class TcpServerTransport:
         connection = self._connection
         if connection is None or connection.writer.is_closing():
             raise PermissionError('Peer disconnected')
+        revalidate = getattr(self._auth, 'revalidate', None)
+        if revalidate is not None:
+            async with asyncio.timeout(self._auth_timeout):
+                principal = await revalidate((connection.reader, connection.writer))
+            if principal is None or principal != connection.principal:
+                await connection.close()
+                raise PermissionError('Credentials expired or revoked')
+        if self._closing or connection.writer.is_closing():
+            raise PermissionError('Peer disconnected during validation')
         return connection.principal
 
     async def recv(self) -> bytes:
@@ -392,7 +402,7 @@ class TcpClientTransport:
         shutdown_timeout: float = 30.0,
         *,
         connect_timeout: float = 10.0,
-        auth=None,
+        auth: ClientAuthenticator | None = None,
     ):
         positive_limit('max_frame_size', max_frame_size)
         for name, value in [('read_timeout',read_timeout),('write_timeout',write_timeout),
@@ -684,8 +694,8 @@ class TcpMulticastServerTransport:
                 try:
                     async with asyncio.timeout(self._auth_timeout):
                         addr = await self._auth.verify((reader, writer))
-                except asyncio.TimeoutError:
-                    logger.warning("Authentication timeout")
+                except (asyncio.TimeoutError, AuthUnavailableError):
+                    logger.warning("Authentication unavailable")
                     return
 
                 if addr is None:
@@ -786,6 +796,15 @@ class TcpMulticastServerTransport:
         connection = self._clients.get(client_id)
         if connection is None or connection.writer.is_closing():
             raise PermissionError('Peer disconnected')
+        revalidate = getattr(self._auth, 'revalidate', None)
+        if revalidate is not None:
+            async with asyncio.timeout(self._auth_timeout):
+                principal = await revalidate((connection.reader, connection.writer))
+            if principal is None or principal != connection.principal:
+                await connection.close()
+                raise PermissionError('Credentials expired or revoked')
+        if self._closing or connection.writer.is_closing():
+            raise PermissionError('Peer disconnected during validation')
         return connection.principal
 
     async def recv(self) -> tuple[str, bytes]:

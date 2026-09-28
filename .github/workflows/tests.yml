@@ -1,7 +1,7 @@
 name: Adversarial tests
 on:
   push:
-    branches: [main, fix/production-contracts]
+    branches: [main, fix/production-contracts, feature/auth-suite]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -25,14 +25,49 @@ jobs:
       - name: Install uv
         run: python -m pip install uv==0.12.18
       - name: Install locked dependencies
-        run: uv sync --locked --python ${{ matrix.python }}
+        run: uv sync --locked --all-extras --python ${{ matrix.python }}
       - name: Mypy (including unannotated function bodies)
-        run: uv run --locked mypy
+        run: uv run --locked --all-extras mypy
       - name: Pyright (Pylance type checking)
-        run: uv run --locked pyright
+        run: uv run --locked --all-extras pyright
       - name: Adversarial suite
-        run: uv run --locked pytest -q -W error
+        run: uv run --locked --all-extras pytest -q -W error
       - name: Build distribution
         run: uv build --no-sources
       - name: Verify installed wheel outside source checkout
-        run: uv run --locked python scripts/check_wheel.py
+        run: uv run --locked --all-extras python scripts/check_wheel.py
+
+  shared-session-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wire_test
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: wire_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U wire_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WIRE_TEST_REDIS_URL: redis://localhost:6379/0
+      WIRE_TEST_POSTGRES_DSN: postgresql://wire_test:test-only-password@localhost:5432/wire_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install uv==0.12.18
+      - run: uv sync --locked --all-extras
+      - name: Auth attacks against real Redis and PostgreSQL
+        run: uv run --locked --all-extras pytest -q tests/auth -W error

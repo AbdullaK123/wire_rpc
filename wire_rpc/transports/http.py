@@ -1,10 +1,14 @@
+from wire_rpc.auth.protocol import InteractiveAuthenticator
+from wire_rpc.auth.errors import AuthUnavailableError
 from collections import deque
 import math
 import ssl
 from wire_rpc._validation import positive_timeout, positive_limit
 from typing import Self
+from collections.abc import Mapping
 from aiohttp import web
 import aiohttp
+from aiohttp.abc import AbstractCookieJar
 import asyncio
 
 from wire_rpc.auth.protocol import Authenticator
@@ -81,7 +85,7 @@ class HttpServerTransport:
         self._app = web.Application(client_max_size=self._max_body_size)
         self._app.router.add_post("/rpc", self._handle)
         auth = self._auth
-        if auth is not None:
+        if isinstance(auth, InteractiveAuthenticator):
             async def login(request):
                 return await self._auth_request(request, auth.login)
             async def logout(request):
@@ -142,6 +146,8 @@ class HttpServerTransport:
                 self._ready.set()
                 response_data = await response
                 return web.Response(status=204) if response_data is None else web.Response(body=response_data, content_type="application/json")
+        except AuthUnavailableError:
+            raise web.HTTPServiceUnavailable(text="Authentication unavailable") from None
         except TimeoutError as exc:
             raise web.HTTPGatewayTimeout(text="RPC request timed out") from exc
         finally:
@@ -241,9 +247,16 @@ class HttpServerTransport:
 class HttpClientTransport:
     requires_text_codec = True
 
-    def __init__(self, url: str, *, request_timeout=30.0, max_body_size=1024 * 1024):
+    def __init__(self, url: str, *, request_timeout=30.0, max_body_size=1024 * 1024,
+                 headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,
+                 ssl_context: ssl.SSLContext | None = None, allow_insecure_credentials: bool = False):
         positive_timeout('request_timeout', request_timeout)
         positive_limit('max_body_size', max_body_size)
+        from wire_rpc.auth.client import validate_client_credentials
+        validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure_credentials)
+        self._headers = dict(headers or {})
+        self._cookie_jar = cookie_jar
+        self._ssl_context = ssl_context
         self._url = url
         self._timeout = request_timeout
         self._max_body_size = max_body_size
@@ -256,7 +269,8 @@ class HttpClientTransport:
             raise RuntimeError('Already connected')
         self._session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=self._timeout),
-            connector=aiohttp.TCPConnector(limit=1),
+            connector=aiohttp.TCPConnector(limit=1, ssl=self._ssl_context if self._ssl_context is not None else True),
+            headers=self._headers, cookie_jar=self._cookie_jar,
             auto_decompress=False,
         )
 
