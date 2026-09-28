@@ -29,7 +29,7 @@ class MsgSpecJsonCodec:
     def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return _to_builtins(obj)
+                return msgspec.convert(_to_builtins(obj), dict)
             return msgspec.convert(obj, target)
         except Exception as exc:
             raise CodecConversionError(str(exc)) from exc
@@ -55,7 +55,7 @@ class MsgSpecMsgPackCodec:
     def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return _to_builtins(obj)
+                return msgspec.convert(_to_builtins(obj), dict)
             return msgspec.convert(obj, target)
         except Exception as exc:
             raise CodecConversionError(str(exc)) from exc

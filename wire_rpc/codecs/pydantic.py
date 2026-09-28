@@ -40,7 +40,9 @@ class PydanticCodec:
     def convert(self, obj: Any, target: Any) -> Any:
         try:
             if target is dict:
-                return msgspec.to_builtins(obj, enc_hook=_enc_hook)
+                return msgspec.convert(
+                    msgspec.to_builtins(obj, enc_hook=_enc_hook), dict
+                )
             if _uses_pydantic(target):
                 return TypeAdapter(target).validate_python(obj)
             return msgspec.convert(obj, target)

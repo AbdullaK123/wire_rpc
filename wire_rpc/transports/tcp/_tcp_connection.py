@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 class TcpConnection:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
+    read_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     created_at: float = field(default_factory=time.monotonic)
     last_activity_at: float = field(default_factory=time.monotonic)
@@ -24,7 +25,11 @@ class TcpConnection:
 
     async def close(self) -> None:
         self.writer.close()
-        await self.writer.wait_closed()
+        try:
+            await self.writer.wait_closed()
+        except (ConnectionError, OSError):
+            # A reset during cleanup must not mask the original frame error.
+            pass
 
 
 __all__ = ["TcpConnection"]
