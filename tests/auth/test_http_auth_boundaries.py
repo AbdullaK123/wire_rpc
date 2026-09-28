@@ -65,4 +65,28 @@ async def test_revoked_cookie_cannot_authorize_a_later_request():
     token = await store.create('alice')
     auth = CookieSessionAuth(Mock(validate=AsyncMock()), store)
     await store.destroy(token)
-    assert await auth.verify(Mock(cookies={'session':token})) is None, 'logout must take effect on subsequent HTTP and WebSocket message authorization checks'
+    assert await auth.verify(Mock(cookies={'session':token}, headers=CIMultiDict())) is None, 'logout must take effect on subsequent HTTP and WebSocket message authorization checks'
+
+
+async def test_duplicate_session_cookies_cannot_select_a_different_authenticated_user():
+    store = InMemorySessionStore()
+    alice, bob = await store.create('alice'), await store.create('bob')
+    auth = CookieSessionAuth(Mock(validate=AsyncMock()), store)
+    request = Mock(cookies={'session':bob}, headers=CIMultiDict({'Cookie':f'session={alice}; session={bob}'}))
+    assert await auth.verify(request) is None, 'duplicate session cookies must fail closed rather than let different HTTP parsers select different identities'
+
+
+async def test_cookie_login_does_not_read_passwords_on_plaintext_connections():
+    request = Mock(secure=False, json=AsyncMock(return_value={'username':'alice','password':'secret'}))
+    auth = CookieSessionAuth(Mock(validate=AsyncMock(return_value='alice')))
+    response = await auth.login(request)
+    assert response.status == 403 and request.json.await_count == 0, 'the default cookie login policy must refuse plaintext before credential parsing and password verification'
+
+
+async def test_cookie_logout_backend_failure_does_not_claim_success_or_clear_the_cookie():
+    store = Mock(destroy=AsyncMock(side_effect=AuthUnavailableError('VERY_SECRET')))
+    auth = CookieSessionAuth(Mock(validate=AsyncMock()), store)
+    request = Mock(secure=True, cookies={'session':'token'}, headers=CIMultiDict({'Cookie':'session=token'}))
+    response = await auth.logout(request)
+    assert response.status == 503 and not response.cookies, 'failed server-side revocation must not be presented as a successful logout while the stolen token still works'
+    assert response.text is not None and 'VERY_SECRET' not in response.text, 'revocation errors must not expose backend diagnostics'

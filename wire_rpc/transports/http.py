@@ -249,9 +249,11 @@ class HttpClientTransport:
 
     def __init__(self, url: str, *, request_timeout=30.0, max_body_size=1024 * 1024,
                  headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,
-                 ssl_context: ssl.SSLContext | None = None):
+                 ssl_context: ssl.SSLContext | None = None, allow_insecure_credentials: bool = False):
         positive_timeout('request_timeout', request_timeout)
         positive_limit('max_body_size', max_body_size)
+        from wire_rpc.auth.client import validate_client_credentials
+        validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure_credentials)
         self._headers = dict(headers or {})
         self._cookie_jar = cookie_jar
         self._ssl_context = ssl_context

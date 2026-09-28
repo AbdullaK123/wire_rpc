@@ -89,3 +89,12 @@ async def test_malformed_tokens_cannot_trigger_backend_operations(stores, token,
     assert await first.validate(token) is None, 'malformed session identifiers must fail locally instead of consuming backend capacity'
     assert await first.rotate(token) is None, 'malformed tokens must not initiate a transactional rotation'
     await first.destroy(token)
+
+
+async def test_sql_metacharacters_in_principal_cannot_escape_identity_storage(stores):
+    first, second = stores
+    principal = "alice');DROP/**/TABLE/**/wire_sessions;--"
+    token = await first.create(principal)
+    assert await second.validate(token) == principal, 'principal values must remain bound data rather than executable SQL or interpolated Redis commands'
+    assert await second.revoke_all(principal) == 1, 'exact-principal revocation must remain safe for SQL and command metacharacters'
+    assert await first.validate(token) is None, 'an injected-looking principal must not bypass canonical revocation'

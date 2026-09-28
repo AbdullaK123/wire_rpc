@@ -14,3 +14,19 @@ def credential_headers(*, bearer: str | None = None, api_key: str | None = None,
     if not token_text(token, 16384):
         raise ValueError('Invalid credential')
     return {'Authorization': f'Bearer {bearer}'} if bearer is not None else {api_key_header: str(api_key)}
+
+
+def validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure):
+    import ssl
+    from yarl import URL
+    parsed = URL(url)
+    if parsed.user is not None:
+        raise ValueError('URL userinfo is unsupported; supply explicit credential headers')
+    if headers or cookie_jar is not None:
+        if not allow_insecure and parsed.scheme not in {'https', 'wss'}:
+            raise ValueError('Configured headers/cookies require TLS; opt in explicitly for local development')
+        if not allow_insecure and ssl_context is not None and (ssl_context.verify_mode != ssl.CERT_REQUIRED or not ssl_context.check_hostname):
+            raise ValueError('Credential-bearing clients require server certificate and hostname verification')
+    for name, value in (headers or {}).items():
+        if not isinstance(name, str) or not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in name + value):
+            raise ValueError('Invalid client header')

@@ -119,3 +119,17 @@ async def test_revoked_session_is_rechecked_before_existing_tcp_connection_dispa
         assert connection.writer.is_closing(), 'revoking a token must close its established TCP channel rather than preserve handshake-time authorization forever'
     finally:
         await client.close(); await server.close()
+
+
+async def test_authentication_timeout_closes_socket_without_backend_side_effects(monkeypatch, writer):
+    class Deadline:
+        async def __aenter__(self):
+            raise TimeoutError
+        async def __aexit__(self, *args):
+            pass
+    monkeypatch.setattr(asyncio, 'timeout', lambda delay: Deadline())
+    validator = Mock(validate=AsyncMock(return_value='alice'))
+    auth = TcpTokenAuth(validator, require_tls=False)
+    result = await auth.verify((reader_for(frame(b'WRPC-TOKEN-1 secret')), writer))
+    assert result is None and writer.closed, 'expired authentication admission must immediately release the unauthenticated connection'
+    assert validator.validate.await_count == 0, 'a deadline reached before credential parsing must not trigger backend work'

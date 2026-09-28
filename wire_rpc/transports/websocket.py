@@ -286,11 +286,13 @@ class WsClientTransport:
     def __init__(self, url='ws://localhost:8000/ws', receive_timeout=10.0, close_timeout=5.0,
                  *, connect_timeout=10.0, write_timeout=10.0, max_msg_size=1024*1024,
                  headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,
-                 ssl_context: ssl.SSLContext | None = None):
+                 ssl_context: ssl.SSLContext | None = None, allow_insecure_credentials: bool = False):
         for name,value in [('receive_timeout',receive_timeout),('close_timeout',close_timeout),
                            ('connect_timeout',connect_timeout),('write_timeout',write_timeout)]:
             positive_timeout(name,value)
         positive_limit('max_msg_size',max_msg_size)
+        from wire_rpc.auth.client import validate_client_credentials
+        validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure_credentials)
         self._headers = dict(headers or {})
         self._cookie_jar, self._ssl_context = cookie_jar, ssl_context
         self._url = url
@@ -303,7 +305,12 @@ class WsClientTransport:
     async def connect(self):
         if self._session is not None:
             raise RuntimeError('Already connected')
-        self._session = aiohttp.ClientSession(headers=self._headers, cookie_jar=self._cookie_jar)
+        trace = aiohttp.TraceConfig()
+        async def reject_redirect(session, context, params):
+            params.response.close()
+            raise ConnectionError('WebSocket redirects are disabled to protect credentials')
+        trace.on_request_redirect.append(reject_redirect)
+        self._session = aiohttp.ClientSession(headers=self._headers, cookie_jar=self._cookie_jar, trace_configs=[trace])
         try:
             async with asyncio.timeout(self._connect_timeout):
                 self._ws = await self._session.ws_connect(self._url, max_msg_size=self._max_msg_size,

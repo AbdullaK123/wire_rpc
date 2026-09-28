@@ -58,3 +58,23 @@ async def test_memory_store_does_not_retain_raw_bearer_tokens():
     store = memory.InMemorySessionStore()
     token = await store.create('alice')
     assert token not in repr(store._sessions) + repr(store._expiry), 'a read-only session-store disclosure must not reveal directly reusable bearer credentials'
+
+
+async def test_corrupt_session_payload_cannot_be_treated_as_authenticated_identity(monkeypatch):
+    store = memory.InMemorySessionStore()
+    token = await store.create('alice')
+    key = store._digest(token)
+    _, expiry = store._sessions[key]
+    store._sessions[key] = ('{"principal":"alice","payload":null}',expiry)
+    with pytest.raises(AuthUnavailableError):
+        await store.validate(token)
+
+
+@pytest.mark.parametrize('stores', ['redis'], indirect=True)
+async def test_redis_record_without_expiry_index_never_becomes_a_permanent_session(stores):
+    from wire_rpc.auth.sessions import RedisSessionStore
+    first, _ = stores
+    assert isinstance(first, RedisSessionStore), "this corruption case must exercise the Redis expiry index"
+    token = await first.create('alice')
+    await first._client.zrem(first._keys[1],first._digest(token))
+    assert await first.validate(token) is None, 'a missing Redis expiry index must deny authentication rather than silently creating a nonexpiring session'

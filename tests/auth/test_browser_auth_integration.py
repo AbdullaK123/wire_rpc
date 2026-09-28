@@ -50,8 +50,8 @@ async def test_revoking_credentials_blocks_mutations_on_an_existing_browser_tran
         jar.update_cookies({'session':token}, response_url=URL(f'http://127.0.0.1:{port}'))
     else:
         headers = dict(credential_headers(bearer=token) if scheme=='bearer' else credential_headers(api_key=token))
-    wire = (HttpClientTransport(f'http://127.0.0.1:{port}/rpc',headers=headers,cookie_jar=jar) if kind=='http'
-            else WsClientTransport(f'ws://127.0.0.1:{port}/ws',headers=headers,cookie_jar=jar))
+    wire = (HttpClientTransport(f'http://127.0.0.1:{port}/rpc',headers=headers,cookie_jar=jar,allow_insecure_credentials=True) if kind=='http'
+            else WsClientTransport(f'ws://127.0.0.1:{port}/ws',headers=headers,cookie_jar=jar,allow_insecure_credentials=True))
     client = Client(wire)
     try:
         await client.connect()
