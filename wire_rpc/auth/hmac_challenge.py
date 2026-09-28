@@ -13,6 +13,19 @@ class HmacChallengAuth:
     ):
         self._secret = secret.encode() if isinstance(secret, str) else secret
 
+    async def authenticate(self, connection) -> None:
+        reader, writer = connection
+        length = int.from_bytes(await reader.readexactly(4), 'big')
+        if length != 32:
+            raise PermissionError('Invalid authentication challenge')
+        challenge = await reader.readexactly(length)
+        digest = hmac.new(self._secret, challenge, hashlib.sha256).digest()
+        writer.write(len(digest).to_bytes(4, 'big') + digest)
+        await writer.drain()
+        length = int.from_bytes(await reader.readexactly(4), 'big')
+        if length != 2 or await reader.readexactly(2) != b'OK':
+            raise PermissionError('Authentication rejected')
+
     async def login(self, request: Any) -> Any:
         return None
 

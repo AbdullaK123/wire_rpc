@@ -10,6 +10,8 @@ def _to_builtins(obj: Any) -> Any:
 
 
 class MsgSpecJsonCodec:
+    is_text = True
+    media_type = "application/json"
 
     def __init__(self):
         self.encoder = msgspec.json.Encoder()
@@ -36,6 +38,8 @@ class MsgSpecJsonCodec:
 
 
 class MsgSpecMsgPackCodec:
+    is_text = False
+    media_type = "application/msgpack"
 
     def __init__(self):
         self.encoder = msgspec.msgpack.Encoder()

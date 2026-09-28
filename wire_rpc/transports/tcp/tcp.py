@@ -11,6 +11,8 @@ Pure asyncio. Zero dependencies beyond stdlib.
 import asyncio
 import ssl
 import uuid
+from wire_rpc._validation import positive_timeout, positive_limit
+from wire_rpc.transports._queue import PayloadQueue
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Generator, Self
@@ -119,9 +121,12 @@ async def _drain_tasks(
 async def _close_writer(writer: asyncio.StreamWriter) -> None:
     writer.close()
     try:
-        await writer.wait_closed()
-    except (ConnectionError, OSError):
-        pass
+        async with asyncio.timeout(5.0):
+            await writer.wait_closed()
+    except (ConnectionError, OSError, TimeoutError):
+        transport = getattr(writer, "transport", None)
+        if transport is not None:
+            transport.abort()
 
 
 class TcpServerTransport:
@@ -130,7 +135,7 @@ class TcpServerTransport:
         self,
         host: str = "0.0.0.0",
         port: int = 9000,
-        max_frame_size: int = 16 * 1024 * 1024,
+        max_frame_size: int = 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
         write_timeout: float = 30.0,
@@ -142,6 +147,13 @@ class TcpServerTransport:
         auth: Authenticator | None = None,
         shutdown_timeout: float = 30.0,
     ):
+        positive_limit('max_frame_size', max_frame_size)
+        for name, value in [('read_timeout',read_timeout),('write_timeout',write_timeout),
+                            ('shutdown_timeout',shutdown_timeout),('ssl_handshake_timeout',ssl_handshake_timeout),
+                            ('ssl_shutdown_timeout',ssl_shutdown_timeout)]:
+            positive_timeout(name, value)
+        if idle_timeout is not None:
+            positive_timeout('idle_timeout', idle_timeout)
         if not 0 < max_frame_size <= 0xFFFFFFFF:
             raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
@@ -151,6 +163,7 @@ class TcpServerTransport:
         self._port = port
         self._max_frame_size = max_frame_size
         self._read_timeout = read_timeout
+        positive_timeout("auth_timeout", auth_timeout)
         self._auth_timeout = auth_timeout
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
@@ -181,7 +194,7 @@ class TcpServerTransport:
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
 
-    async def connect(self) -> None:
+    async def _start(self) -> None:
         with _track_operation(self._inflight, self._closing):
             server = await asyncio.start_server(
                 self._handle_client,
@@ -200,10 +213,11 @@ class TcpServerTransport:
             self._server = server
             logger.info(f"TCP server listening on {self._host}:{self._port}")
 
-            await self._connected.wait()
-
-            if self._closing:
-                raise ConnectionError("Transport is closing")
+    async def connect(self) -> None:
+        await self._start()
+        await self._connected.wait()
+        if self._closing:
+            raise ConnectionError('Transport is closing')
 
     async def _handle_client(
         self,
@@ -238,7 +252,7 @@ class TcpServerTransport:
             if self._closing:
                 return
 
-            self._connection = TcpConnection(reader=reader, writer=writer)
+            self._connection = TcpConnection(reader=reader, writer=writer, principal=addr)
             transferred = True
             self._connected.set()
             logger.info(f"TCP client connected from {addr}")
@@ -284,6 +298,16 @@ class TcpServerTransport:
 
         self._connected.clear()
 
+    @property
+    def max_message_size(self):
+        return self._max_frame_size
+
+    async def get_principal(self, client_id=None):
+        connection = self._connection
+        if connection is None or connection.writer.is_closing():
+            raise PermissionError('Peer disconnected')
+        return connection.principal
+
     async def recv(self) -> bytes:
         with _track_operation(self._inflight, self._closing):
             await self._connected.wait()
@@ -330,6 +354,9 @@ class TcpServerTransport:
                     async with asyncio.timeout(self._write_timeout):
                         await connection.writer.drain()
                     connection.touch()
+            except (asyncio.CancelledError, ConnectionError, OSError):
+                await connection.close()
+                raise
             except IdleTimeoutError:
                 logger.error("Idle timeout")
                 await connection.close()
@@ -340,7 +367,7 @@ class TcpServerTransport:
                 raise
 
     async def __aenter__(self) -> Self:
-        self._connect_task = asyncio.create_task(self.connect())
+        await self._start()
         return self
 
     async def __aexit__(
@@ -358,7 +385,7 @@ class TcpClientTransport:
         self,
         host: str = "localhost",
         port: int = 9000,
-        max_frame_size: int = 16 * 1024 * 1024,
+        max_frame_size: int = 1024 * 1024,
         read_timeout: float = 30.0,
         write_timeout: float = 30.0,
         idle_timeout: float | None = 300.0,
@@ -367,12 +394,26 @@ class TcpClientTransport:
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         shutdown_timeout: float = 30.0,
+        *,
+        connect_timeout: float = 10.0,
+        auth=None,
     ):
+        positive_limit('max_frame_size', max_frame_size)
+        for name, value in [('read_timeout',read_timeout),('write_timeout',write_timeout),
+                            ('shutdown_timeout',shutdown_timeout),('ssl_handshake_timeout',ssl_handshake_timeout),
+                            ('ssl_shutdown_timeout',ssl_shutdown_timeout)]:
+            positive_timeout(name, value)
+        if idle_timeout is not None:
+            positive_timeout('idle_timeout', idle_timeout)
         if not 0 < max_frame_size <= 0xFFFFFFFF:
             raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
             raise ValueError("Shutdown timeout must be greater than zero")
 
+        positive_timeout("connect_timeout", connect_timeout)
+        self._connect_timeout = connect_timeout
+        self._client_auth = auth
+        self._connecting = False
         self._host = host
         self._port = port
         self._read_timeout = read_timeout
@@ -393,24 +434,30 @@ class TcpClientTransport:
         self._inflight: set[asyncio.Task[object]] = set()
 
     async def connect(self) -> None:
-        with _track_operation(self._inflight, self._closing):
-            reader, writer = await asyncio.open_connection(
-                self._host,
-                self._port,
-                ssl=self._ssl,
-                ssl_handshake_timeout=self._ssl_handshake_timeout,
-                ssl_shutdown_timeout=self._ssl_shutdown_timeout,
-            )
-
-            if self._closing:
+        if self._connecting or self._connection is not None:
+            raise RuntimeError('Connection already exists or is in progress')
+        self._connecting = True
+        writer = None
+        try:
+            with _track_operation(self._inflight, self._closing):
+                async with asyncio.timeout(self._connect_timeout):
+                    reader, writer = await asyncio.open_connection(
+                        self._host, self._port, ssl=self._ssl,
+                        ssl_handshake_timeout=self._ssl_handshake_timeout,
+                        ssl_shutdown_timeout=self._ssl_shutdown_timeout)
+                    if self._keep_alive is not None:
+                        configure_keepalive(writer, self._keep_alive)
+                    if self._client_auth is not None:
+                        await self._client_auth.authenticate((reader,writer))
+                    if self._closing:
+                        raise ConnectionError('Transport closing')
+                    self._connection = TcpConnection(reader=reader, writer=writer)
+        except BaseException:
+            if writer is not None:
                 await _close_writer(writer)
-                raise ConnectionError("Transport is closing")
-
-            if self._keep_alive is not None:
-                configure_keepalive(writer, self._keep_alive)
-
-            self._connection = TcpConnection(reader=reader, writer=writer)
-            logger.info(f"Connected to TCP server at {self._host}:{self._port}")
+            raise
+        finally:
+            self._connecting = False
 
     async def close(self) -> None:
         self._closing = True
@@ -423,6 +470,16 @@ class TcpClientTransport:
         if self._connection:
             await self._connection.close()
             self._connection = None
+
+    @property
+    def max_message_size(self):
+        return self._max_frame_size
+
+    async def get_principal(self, client_id=None):
+        connection = self._connection
+        if connection is None or connection.writer.is_closing():
+            raise PermissionError('Peer disconnected')
+        return connection.principal
 
     async def recv(self) -> bytes:
         with _track_operation(self._inflight, self._closing):
@@ -465,6 +522,9 @@ class TcpClientTransport:
                     async with asyncio.timeout(self._write_timeout):
                         await connection.writer.drain()
                     connection.touch()
+            except (asyncio.CancelledError, ConnectionError, OSError):
+                await connection.close()
+                raise
             except IdleTimeoutError:
                 logger.error("Idle timeout")
                 await connection.close()
@@ -493,20 +553,30 @@ class TcpMulticastServerTransport:
         self,
         host: str = "0.0.0.0",
         port: int = 9000,
-        max_frame_size: int = 16 * 1024 * 1024,
+        max_frame_size: int = 1024 * 1024,
         read_timeout: float = 30.0,
         auth_timeout: float = 10.0,
         write_timeout: float = 30.0,
         idle_timeout: float | None = 300.0,
-        max_connections: int = 1024,
-        recv_queue_size: int = 1024,
+        max_connections: int = 64,
+        recv_queue_size: int = 256,
         ssl_context: ssl.SSLContext | None = None,
         ssl_handshake_timeout: float = 10.0,
         ssl_shutdown_timeout: float = 10.0,
         keep_alive: TcpKeepaliveConfig | None = TcpKeepaliveConfig(),
         auth: Authenticator | None = None,
         shutdown_timeout: float = 30.0,
+        *,
+        max_queue_bytes: int = 16 * 1024 * 1024,
+        per_peer_queue_size: int = 16,
     ):
+        positive_limit('max_frame_size', max_frame_size)
+        for name, value in [('read_timeout',read_timeout),('write_timeout',write_timeout),
+                            ('shutdown_timeout',shutdown_timeout),('ssl_handshake_timeout',ssl_handshake_timeout),
+                            ('ssl_shutdown_timeout',ssl_shutdown_timeout)]:
+            positive_timeout(name, value)
+        if idle_timeout is not None:
+            positive_timeout('idle_timeout', idle_timeout)
         if not 0 < max_frame_size <= 0xFFFFFFFF:
             raise ValueError("Frame size must fit a positive 4-byte length")
         if shutdown_timeout <= 0:
@@ -516,6 +586,7 @@ class TcpMulticastServerTransport:
         self._port = port
         self._auth = auth
         self._read_timeout = read_timeout
+        positive_timeout("auth_timeout", auth_timeout)
         self._auth_timeout = auth_timeout
         self._write_timeout = write_timeout
         self._idle_timeout = idle_timeout
@@ -534,9 +605,9 @@ class TcpMulticastServerTransport:
             raise ValueError("Receive queue size must be positive")
         self._recv_queue_size = recv_queue_size
         self._clients: dict[str, TcpConnection] = {}
-        self._recv_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(
-            maxsize=self._recv_queue_size
-        )
+        if max_frame_size > max_queue_bytes:
+            raise ValueError('A frame must fit the queue byte budget')
+        self._recv_queue = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
         self._server: asyncio.Server | None = None
         self._closing = False
         self._inflight: set[asyncio.Task[object]] = set()
@@ -631,6 +702,7 @@ class TcpMulticastServerTransport:
             if self._closing:
                 return
 
+            connection.principal = addr
             self._clients[client_id] = connection
             registered = True
             logger.info(
@@ -675,6 +747,7 @@ class TcpMulticastServerTransport:
             else:
                 if registered:
                     self._clients.pop(client_id, None)
+                    self._recv_queue.drop_peer(client_id)
 
                 await connection.close()
 
@@ -686,6 +759,7 @@ class TcpMulticastServerTransport:
 
     async def close(self) -> None:
         self._closing = True
+        self._recv_queue.close()
 
         if self._server:
             self._server.close()
@@ -705,6 +779,20 @@ class TcpMulticastServerTransport:
                 *(connection.close() for connection in connections),
                 return_exceptions=True,
             )
+
+    @property
+    def max_message_size(self):
+        return self._max_frame_size
+
+    @property
+    def stats(self):
+        return {**self._recv_queue.stats, 'connections': len(self._clients)}
+
+    async def get_principal(self, client_id=None):
+        connection = self._clients.get(client_id)
+        if connection is None or connection.writer.is_closing():
+            raise PermissionError('Peer disconnected')
+        return connection.principal
 
     async def recv(self) -> tuple[str, bytes]:
         with _track_operation(self._inflight, self._closing):
@@ -730,6 +818,12 @@ class TcpMulticastServerTransport:
                     async with asyncio.timeout(self._write_timeout):
                         await connection.writer.drain()
                     connection.touch()
+            except (asyncio.CancelledError, ConnectionError, OSError):
+                if self._clients.get(client_id) is connection:
+                    self._clients.pop(client_id, None)
+                    self._recv_queue.drop_peer(client_id)
+                await connection.close()
+                raise
             except IdleTimeoutError:
                 self._clients.pop(client_id, None)
                 await connection.close()
@@ -755,30 +849,14 @@ class TcpMulticastServerTransport:
         with _track_operation(self._inflight, self._closing):
             if len(data) == 0 or len(data) > self._max_frame_size:
                 raise InvalidFrameSizeError(self._max_frame_size)
-
-            frame = len(data).to_bytes(4, "big") + data
-            dead: list[tuple[str, TcpConnection]] = []
-
-            for client_id, connection in list(self._clients.items()):
+            async def deliver(client_id):
                 try:
-                    _ensure_not_idle(connection, self._idle_timeout)
-
-                    async with connection.write_lock:
-                        connection.writer.write(frame)
-                        async with asyncio.timeout(self._write_timeout):
-                            await connection.writer.drain()
-                        connection.touch()
-                except (
-                    IdleTimeoutError,
-                    asyncio.TimeoutError,
-                    ConnectionError,
-                    ConnectionResetError,
-                ):
-                    dead.append((client_id, connection))
-
-            for client_id, connection in dead:
-                self._clients.pop(client_id, None)
-                await connection.close()
+                    await self.send(client_id, data)
+                except (ConnectionError, OSError, IdleTimeoutError):
+                    pass
+            # Fanout is bounded by connection admission, not one unbounded task
+            # per message. Slow recipients do not serialize unrelated peers.
+            await asyncio.gather(*(deliver(key) for key in list(self._clients)))
 
     async def __aenter__(self) -> Self:
         await self.connect()

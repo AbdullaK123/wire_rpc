@@ -12,6 +12,14 @@ class SharedSecretAuth:
     ):
         self._secret = secret.encode() if isinstance(secret, str) else secret
 
+    async def authenticate(self, connection) -> None:
+        reader, writer = connection
+        writer.write(len(self._secret).to_bytes(4, 'big') + self._secret)
+        await writer.drain()
+        length = int.from_bytes(await reader.readexactly(4), 'big')
+        if length != 2 or await reader.readexactly(2) != b'OK':
+            raise PermissionError('Authentication rejected')
+
     async def login(self, request: Any) -> Any:
         return None
 

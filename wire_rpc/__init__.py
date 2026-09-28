@@ -1,3 +1,4 @@
+from .context import RequestContext, current_request
 from .app import App
 from .multicast_app import MulticastApp
 from .client import Client
@@ -7,6 +8,8 @@ from .router import Router
 
 __all__ = [
     "App",
+    "RequestContext",
+    "current_request",
     "MulticastApp",
     "Client",
     "Router",

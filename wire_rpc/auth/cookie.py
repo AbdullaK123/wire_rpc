@@ -1,5 +1,5 @@
 from wire_rpc.auth.credentials.protocol import CredentialValidator
-from wire_rpc.auth.sessions.memory import InMemorySessionStore
+from wire_rpc.auth.sessions.memory import InMemorySessionStore, SessionCapacityError
 from wire_rpc.auth.sessions.protocol import SessionStore
 from aiohttp import web
 
@@ -29,19 +29,27 @@ class CookieSessionAuth:
         self._max_age = max_age
 
     async def startup(self) -> None:
-        if isinstance(self._validator, StartupComponent):
-            await self._validator.startup()
-
-        if isinstance(self._sessions, StartupComponent):
-            await self._sessions.startup()
+        self._started = []
+        try:
+            for component in (self._validator, self._sessions):
+                if isinstance(component, StartupComponent):
+                    await component.startup()
+                    self._started.append(component)
+        except BaseException:
+            await self.shutdown()
+            raise
 
     async def shutdown(self) -> None:
-        if isinstance(self._sessions, StartupComponent):
-            await self._sessions.shutdown()
+        components, self._started = getattr(self, '_started', []), []
+        failure = None
+        for component in reversed(components):
+            try:
+                await component.shutdown()
+            except Exception as exc:
+                failure = exc
+        if failure is not None:
+            raise failure
 
-        if isinstance(self._validator, StartupComponent):
-            await self._validator.shutdown()
-    
     async def login(self, request: web.Request) -> web.Response:
         try:
             body = await request.json()
@@ -52,7 +60,10 @@ class CookieSessionAuth:
         if user_id is None:
             return web.json_response({"ok": False, "error": "Invalid credentials"}, status=401)
  
-        session_id = await self._sessions.create(user_id)
+        try:
+            session_id = await self._sessions.create(user_id)
+        except SessionCapacityError:
+            return web.json_response({'ok':False,'error':'Session capacity unavailable'},status=503)
  
         response = web.json_response({"ok": True, "user_id": user_id})
         response.set_cookie(
