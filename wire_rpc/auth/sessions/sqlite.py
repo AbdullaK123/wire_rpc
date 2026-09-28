@@ -6,13 +6,15 @@ import time
 from typing import Any
 from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
 from wire_rpc.auth.sessions._base import SessionStoreBase
-from wire_rpc._validation import positive_timeout
+from wire_rpc._validation import positive_timeout, positive_limit
 
 
 class SQLiteSessionStore(SessionStoreBase):
-    def __init__(self, path: str, ttl: float = 86400, *, max_sessions: int = 10000, timeout: float = 5):
+    def __init__(self, path: str, ttl: float = 86400, *, max_sessions: int = 10000, timeout: float = 5, max_concurrency: int = 4):
         super().__init__(ttl, max_sessions=max_sessions)
         positive_timeout('timeout', timeout)
+        positive_limit('max_concurrency', max_concurrency)
+        self._limit, self._active = max_concurrency, 0
         if path == ':memory:' or not path:
             raise ValueError('SQLite sessions require a persistent file path')
         self._path, self._timeout = path, timeout
@@ -36,7 +38,25 @@ class SQLiteSessionStore(SessionStoreBase):
             raise AuthUnavailableError('Session store not started')
         # The thread owns its connection and transaction through commit/rollback,
         # even if the caller is cancelled while awaiting the outcome.
-        return await asyncio.to_thread(self._transaction, operation, key, value, new_key)
+        if self._active >= self._limit:
+            raise AuthUnavailableError('SQLite session capacity unavailable')
+        self._active += 1
+        task = asyncio.create_task(asyncio.to_thread(self._transaction, operation, key, value, new_key))
+        deferred_release = False
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.done():
+                def finished(done: asyncio.Task[Any]) -> None:
+                    self._active -= 1
+                    if not done.cancelled():
+                        done.exception()
+                task.add_done_callback(finished)
+                deferred_release = True
+            raise
+        finally:
+            if not deferred_release:
+                self._active -= 1
 
     def _transaction(self, operation: str, key: str, value: str, new_key: str) -> Any:
         db = sqlite3.connect(self._path, timeout=self._timeout)

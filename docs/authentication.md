@@ -92,7 +92,9 @@ idempotent. Revoke-all targets an exact principal and returns the number removed
 | PostgreSQL | Inject an asyncpg pool; caller owns/closes it. `startup()` creates the fixed schema and indexes. Namespace advisory locks plus transactions serialize mutations and capacity checks across workers. |
 
 Defaults: 24-hour absolute TTL, 10,000 sessions per store/namespace. SQLite uses a
-five-second database lock timeout. Configure Redis socket timeouts and PostgreSQL
+five-second database lock timeout and at most four active worker operations per adapter.
+Cancellation retains SQLite worker admission until the worker finishes, just as it does
+for password hashing. Configure Redis socket timeouts and PostgreSQL
 pool/command timeouts; transport/application deadlines provide an additional bound.
 
 Redis expiration pruning and revoke-all perform work proportional to the bounded
