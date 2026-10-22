@@ -36,12 +36,12 @@ def peer_thread():
     worker.stop()
 
 
-async def test_send_before_peer_connects_silently_drops_message():
-    a, _b = ThreadTransport.pair()
+async def test_send_to_peer_that_never_connects_hangs_or_drops():
+    a, _b = ThreadTransport.pair(connect_timeout=0.1)
     await a.connect()
     with pytest.raises(ConnectionError):
-        await a.send(b'{"jsonrpc":"2.0","method":"ping","id":1}')
-    # if this passed, the caller would wait the full call timeout for a reply that can never come
+        await asyncio.wait_for(a.send(b'{"jsonrpc":"2.0","method":"ping","id":1}'), 2.0)
+    # silent success means the caller waits the full call timeout for a reply that can never come
 
 
 async def test_message_crosses_threads_intact(peer_thread):
@@ -240,3 +240,82 @@ async def test_rpc_call_fails_across_threads(peer_thread):
         await client.close()
     await asyncio.wait_for(asyncio.wrap_future(server), 2.0)
     # if this times out, the server thread never noticed the client left and stays alive forever
+
+
+async def test_send_before_peer_connects_is_lost(peer_thread):
+    a, b = ThreadTransport.pair(connect_timeout=2.0)
+    await a.connect()
+    sending = asyncio.create_task(a.send(b"early"))
+    await asyncio.sleep(0.05)
+    assert not sending.done(), "send gave up before the peer had a chance to start; startup races break the first RPC"
+    peer_thread.run(b.connect())
+    await asyncio.wait_for(sending, 1.0)
+    assert peer_thread.run(b.recv()) == b"early", "a message sent while the peer was starting never arrived"
+
+
+async def test_waiting_send_freezes_sender_event_loop():
+    a, _b = ThreadTransport.pair(connect_timeout=0.5)
+    await a.connect()
+    ticks = 0
+
+    async def heartbeat():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.01)
+
+    beat = asyncio.create_task(heartbeat())
+    try:
+        with pytest.raises(ConnectionError):
+            await a.send(b"x")
+    finally:
+        beat.cancel()
+    assert ticks > 10, "waiting for the peer blocked the whole event loop; every other task on this thread stalls"
+
+
+async def test_peer_closing_before_connect_leaves_sender_waiting_full_timeout():
+    a, b = ThreadTransport.pair(connect_timeout=5.0)
+    await a.connect()
+    sending = asyncio.create_task(a.send(b"x"))
+    await asyncio.sleep(0.05)
+    await asyncio.to_thread(asyncio.run, b.close())
+    with pytest.raises(ConnectionError):
+        await asyncio.wait_for(sending, 1.0)
+    # a peer that shut down will never connect; making the sender wait it out delays shutdown by connect_timeout
+
+
+async def test_sender_closing_while_waiting_still_delivers(peer_thread):
+    a, b = ThreadTransport.pair(connect_timeout=2.0)
+    await a.connect()
+    sending = asyncio.create_task(a.send(b"x"))
+    await asyncio.sleep(0.05)
+    await a.close()
+    peer_thread.run(b.connect())
+    with pytest.raises(ConnectionError):
+        await asyncio.wait_for(sending, 1.0)
+    # a message from a closed endpoint looks like a live request to the server, which then replies into nothing
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("inf"), float("nan"), "5"])
+def test_invalid_connect_timeout_is_accepted(bad):
+    with pytest.raises(ValueError):
+        ThreadTransport.pair(connect_timeout=bad)
+    # zero or negative silently disables waiting; inf or nan waits forever on a peer that never starts
+
+
+async def test_client_first_call_races_server_startup(peer_thread):
+    client_end, server_end = ThreadTransport.pair(connect_timeout=2.0)
+    app = App(server_end)
+
+    @app.method("add")
+    async def add(params: dict, ctx) -> int:
+        return params["a"] + params["b"]
+
+    server = peer_thread.submit(app._run())  # no sleep, no polling: the client must not need to know when the server is up
+    client = Client(client_end, call_timeout=3.0)
+    await client.connect()
+    try:
+        assert await client.call("add", int, {"a": 2, "b": 3}) == 5, "the first call failed because the server thread had not connected yet"
+    finally:
+        await client.close()
+    await asyncio.wait_for(asyncio.wrap_future(server), 2.0)

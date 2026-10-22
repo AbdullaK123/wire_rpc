@@ -81,12 +81,13 @@ Every transport enforces a maximum message size. Authentication is set per trans
 `ThreadTransport.pair()` returns two connected ends. Give one to each thread;
 each end binds to the event loop of the thread that connects it. Sending copies
 the message, and an end that is full (`max_queue_size` unread messages) rejects
-new sends instead of growing without limit.
+new sends instead of growing without limit. Either thread can start first: a
+send waits up to `connect_timeout` (5 seconds by default) for the other end to
+connect.
 
 ```python
 import asyncio
 import threading
-import time
 
 from wire_rpc import App, Client
 from wire_rpc.transports import ThreadTransport
@@ -101,7 +102,6 @@ async def add(params: dict, ctx) -> int:
 
 
 threading.Thread(target=app.run, daemon=True).start()
-time.sleep(0.2)  # see the limitation below
 
 
 async def main():
@@ -111,9 +111,6 @@ async def main():
 
 asyncio.run(main())
 ```
-
-**Limitation:** a send fails with `ConnectionError` until the other end has
-connected, and there is no readiness signal yet. That is why the example sleeps.
 
 ## Development and release checks
 
