@@ -13,6 +13,20 @@ _SCHEMA = '''CREATE TABLE IF NOT EXISTS wire_rpc_sessions (
 
 
 class PostgresSessionStore(SessionStoreBase):
+    """Sessions in PostgreSQL, shared by every process using the same database.
+
+    Operations in one namespace are serialized with an advisory lock, so the
+    capacity limit holds across processes. ``startup`` creates the
+    ``wire_rpc_sessions`` table if needed, so the database role must be allowed to.
+    Needs the ``postgres`` extra.
+
+    Args:
+        pool: An asyncpg pool. You own it; the store never closes it.
+        ttl: Session lifetime in seconds.
+        namespace: Separates applications sharing one table.
+        max_sessions: Most live sessions in this namespace.
+    """
+
     def __init__(self, pool: Any, ttl: float = 86400, *, namespace: str = 'wire-rpc', max_sessions: int = 10000):
         super().__init__(ttl, max_sessions=max_sessions)
         self._namespace = identity(namespace)
@@ -20,6 +34,7 @@ class PostgresSessionStore(SessionStoreBase):
         self._lock_id = int.from_bytes(hashlib.sha256(('wire-rpc:' + namespace).encode()).digest()[:8], 'big', signed=True)
 
     async def startup(self) -> None:
+        """Create the sessions table and its indexes if they do not exist."""
         async with self._pool.acquire() as db:
             async with db.transaction():
                 # Serialize schema setup across namespaces/processes as well.
@@ -29,9 +44,10 @@ class PostgresSessionStore(SessionStoreBase):
                 await db.execute('CREATE INDEX IF NOT EXISTS wire_rpc_sessions_principal ON wire_rpc_sessions(namespace, principal)')
 
     async def shutdown(self) -> None:
-        pass
+        """Nothing to release; the pool belongs to the caller."""
 
     async def _execute(self, operation: str, key: str = '', value: str = '', new_key: str = '') -> Any:
+        """Run one session operation in its own transaction, after deleting expired rows."""
         async with self._pool.acquire() as db:
             async with db.transaction(isolation='read_committed'):
                 await db.execute('SELECT pg_advisory_xact_lock($1)', self._lock_id)

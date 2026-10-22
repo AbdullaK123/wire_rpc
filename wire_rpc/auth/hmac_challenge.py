@@ -1,4 +1,10 @@
 
+"""A minimal HMAC challenge-response handshake for TCP with one shared secret.
+
+TLS is not enforced and every client gets the same principal. Prefer
+``HmacChallengeAuth`` from ``wire_rpc.auth``, which supports per-client keys.
+"""
+
 from wire_rpc.auth._util import identity
 import asyncio
 from typing import Any
@@ -7,6 +13,14 @@ import hmac
 import hashlib
 
 class HmacChallengAuth:
+    """Both sides hold the same secret; the client proves it by signing a random challenge.
+
+    One object can be used on both the server (``auth=``) and the client.
+
+    Args:
+        secret: The shared secret.
+        principal: The identity given to every client that knows the secret.
+    """
 
     def __init__(
         self,
@@ -17,6 +31,11 @@ class HmacChallengAuth:
         self._secret = secret.encode() if isinstance(secret, str) else secret
 
     async def authenticate(self, connection) -> None:
+        """Client side: sign the server's challenge and wait for ``OK``.
+
+        Raises:
+            PermissionError: The challenge was malformed or the server rejected the proof.
+        """
         reader, writer = connection
         length = int.from_bytes(await reader.readexactly(4), 'big')
         if length != 32:
@@ -30,13 +49,16 @@ class HmacChallengAuth:
             raise PermissionError('Authentication rejected')
 
     async def login(self, request: Any) -> Any:
+        """No-op; this authenticator has no login flow."""
         return None
 
     async def logout(self, request: Any) -> Any:
+        """No-op; this authenticator has no logout flow."""
         return None
 
     async def verify(self, request: Any) -> str | None:
 
+        """Server side: send a challenge and return the principal if the reply matches, else close and return ``None``."""
         reader: asyncio.StreamReader = request[0]
         writer: asyncio.StreamWriter = request[1]
 

@@ -53,6 +53,19 @@ return redis.error_reply('Unknown operation')
 
 
 class RedisSessionStore(SessionStoreBase):
+    """Sessions in Redis, shared by every process using the same server.
+
+    Every operation is one Lua script, so it is atomic, and expiry uses Redis's
+    clock. All keys share one hash tag, so this works on Redis Cluster. Needs the
+    ``redis`` extra.
+
+    Args:
+        client: A ``redis.asyncio`` client. You own it; the store never closes it.
+        ttl: Session lifetime in seconds.
+        namespace: Prefix separating applications on one server.
+        max_sessions: Most live sessions in this namespace.
+    """
+
     def __init__(self, client: Any, ttl: float = 86400, *, namespace: str = 'wire-rpc', max_sessions: int = 10000):
         super().__init__(ttl, max_sessions=max_sessions)
         identity(namespace)
@@ -62,6 +75,7 @@ class RedisSessionStore(SessionStoreBase):
         self._keys = (f'{{{namespace}}}:sessions', f'{{{namespace}}}:expiry')
 
     async def _execute(self, operation: str, key: str = '', value: str = '', new_key: str = '') -> Any:
+        """Run one session operation as a single atomic script."""
         result = await self._client.eval(_SCRIPT, 2, *self._keys, operation, key, value, new_key, self._ttl, self._max_sessions)
         if result == -1:
             raise SessionCapacityError('Session capacity exhausted')

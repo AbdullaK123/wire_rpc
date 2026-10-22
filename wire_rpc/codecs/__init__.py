@@ -1,3 +1,9 @@
+"""Codecs: how messages become bytes.
+
+Use ``MsgSpecJsonCodec`` (default), ``MsgSpecMsgPackCodec`` or ``PydanticCodec``.
+Client and server must use the same codec.
+"""
+
 from .protocol import (
     Codec,
     CodecConversionError,

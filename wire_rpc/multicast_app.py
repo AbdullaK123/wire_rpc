@@ -34,6 +34,23 @@ type ShutdownHook = Callable[[Any], Awaitable[None]]
 
 
 class MulticastApp:
+    """A JSON-RPC 2.0 server for a transport with many peers.
+
+    Each peer gets at most one request in flight; a second concurrent request from
+    the same peer is rejected with -32002. Requests from different peers run
+    concurrently up to ``max_concurrency``.
+
+    Args:
+        transport: The multi-peer connection to serve.
+        codec: Encodes and decodes messages; JSON via msgspec by default.
+        handler_timeout: Seconds a request may run before it fails with -32000.
+        startup_timeout: Seconds allowed for transport startup plus the startup hook.
+        shutdown_timeout: Seconds allowed for each shutdown step and for draining
+            requests in flight when ``stop()`` is called.
+        max_response_size: Largest encoded response in bytes. Capped by the
+            transport's ``max_message_size``; must leave at least 2048 bytes.
+        max_concurrency: Most requests executing at once across all peers.
+    """
 
     def __init__(
         self,
@@ -77,18 +94,29 @@ class MulticastApp:
         self._on_shutdown: Optional[ShutdownHook] = None
 
     async def _internal_startup(self):
+        """Start the transport if it has its own startup step."""
         if isinstance(self._transport, StartupComponent):
              await self._transport.startup()
     
     async def _internal_shutdown(self):
+         """Shut down the transport if it has its own shutdown step."""
          if isinstance(self._transport, StartupComponent):
              await self._transport.shutdown()
 
     @property
     def transport(self) -> MulticastTransport:
+        """The transport this app serves; use it to send to a specific peer."""
         return self._transport
 
     def method(self, name: str) -> Callable:
+        """Register a handler for ``name``; use as ``@app.method("name")``.
+
+        Supported signatures are ``(ctx)``, ``(params, ctx)``, ``(ctx, client_id)`` and
+        ``(params, ctx, client_id)``. Params are converted to the type hint on ``params``.
+
+        Raises:
+            TypeError: The handler's signature is not supported.
+        """
         def decorator(func: Handler) -> Handler:
             spec = inspect_handler(func, multicast=True)
             self._handlers[name] = func
@@ -103,6 +131,7 @@ class MulticastApp:
         return decorator
 
     def include_router(self, router: Router) -> None:
+        """Register every handler in ``router`` and its children under their full dotted names."""
         entries = router._flatten()
         for name, entry in entries.items():
             self._handlers[name] = entry.handler
@@ -114,6 +143,11 @@ class MulticastApp:
             )
 
     def middleware(self, func: Middleware) -> Middleware:
+        """Register app-wide middleware; use as ``@app.middleware``.
+
+        Middleware is ``async (request, ctx, next)`` and must call ``await next(request, ctx)``
+        to continue. App middleware runs before router middleware, in registration order.
+        """
         inspect_middleware(func)
         self._middleware.append(func)
         logger.info(
@@ -122,10 +156,15 @@ class MulticastApp:
         return func
 
     def on_startup(self, func: StartupHook) -> StartupHook:
+        """Register the startup hook; use as ``@app.on_startup``.
+
+        Whatever the hook returns becomes the ``ctx`` passed to every handler.
+        """
         self._on_startup = func
         return func
 
     def on_shutdown(self, func: ShutdownHook) -> ShutdownHook:
+        """Register the shutdown hook; it receives the ``ctx`` returned by the startup hook."""
         self._on_shutdown = func
         return func
 
@@ -141,6 +180,7 @@ class MulticastApp:
     ) -> WireResponse:
 
 
+        """Convert params, run the middleware chain and handler for ``client_id``, and build the response."""
         if request.method not in self._handlers:
             logger.warning("RPC method not found")
             return WireErrorResponse(
@@ -194,6 +234,7 @@ class MulticastApp:
 
     @property
     def stats(self) -> dict:
+        """Request counters: requests, active, completed, failed, timed_out and invalid."""
         return self._stats.snapshot()
 
     async def stop(self):
@@ -201,9 +242,11 @@ class MulticastApp:
         self._stopping.set()
 
     async def _next(self, transport):
+        """Receive the next message, or raise ``ConnectionError`` once the app is stopping."""
         return await self._await_or_stop(transport.recv())
 
     async def _await_or_stop(self, operation):
+        """Await ``operation`` unless ``stop()`` is called first, then raise ``ConnectionError``."""
         receive = asyncio.create_task(operation)
         stopped = asyncio.create_task(self._stopping.wait())
         try:
@@ -218,6 +261,7 @@ class MulticastApp:
             await asyncio.gather(receive, stopped, return_exceptions=True)
 
     async def _serve_request(self, client_id, data, lock, slots, busy=False):
+        """Process one request from ``client_id``, send the reply, and release its peer lock and slot."""
         try:
             if busy:
                 async def reject(req):
@@ -240,6 +284,7 @@ class MulticastApp:
             slots.release()
 
     async def _listen(self):
+        """Accept requests until the transport closes or the app stops, then drain or cancel work in flight."""
         slots = asyncio.Semaphore(self._max_concurrency)
         async with self._transport as t:
             try:
@@ -271,9 +316,15 @@ class MulticastApp:
                     self._tasks.clear()
 
     def run(self):
+        """Run the app on a new event loop until the transport closes or ``stop()`` is called."""
         asyncio.run(self._run())
 
     async def _run(self):
+        """Start up, serve until stopped, then shut down in reverse order.
+
+        Raises:
+            RuntimeError: The app is already running or has already run once.
+        """
         if self._running or self._stopping.is_set():
             raise RuntimeError('Application is already running or stopped')
         self._running = True

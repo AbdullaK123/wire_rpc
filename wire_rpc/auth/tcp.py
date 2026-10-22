@@ -12,6 +12,11 @@ from wire_rpc.auth.protocol import TokenValidator
 
 
 async def _read(reader: Any, maximum: int) -> bytes:
+    """Read one length-prefixed handshake frame of at most ``maximum`` bytes.
+
+    Raises:
+        PermissionError: The frame is empty or too long.
+    """
     length = int.from_bytes(await reader.readexactly(4), 'big')
     if not 0 < length <= maximum:
         raise PermissionError('Invalid authentication frame')
@@ -19,16 +24,30 @@ async def _read(reader: Any, maximum: int) -> bytes:
 
 
 async def _write(writer: Any, data: bytes) -> None:
+    """Write one length-prefixed handshake frame."""
     writer.write(len(data).to_bytes(4, 'big') + data)
     await writer.drain()
 
 
 def _tls(writer: Any, required: bool) -> None:
+    """Raise ``PermissionError`` if TLS is required but the connection is not using it."""
     if required and writer.get_extra_info('ssl_object') is None:
         raise PermissionError('Authentication requires TLS')
 
 
 class TcpTokenAuth(DependencyLifecycle):
+    """Server side of the TCP token handshake: the client sends a token, the server checks it.
+
+    The token is sent in the clear inside the connection, so keep ``require_tls``.
+    Before each request the stored token is validated again, so revoking it cuts
+    off a live connection.
+
+    Args:
+        validator: Maps a token to a principal.
+        require_tls: Reject connections without TLS.
+        timeout: Seconds allowed for the handshake.
+    """
+
     def __init__(self, validator: TokenValidator, *, require_tls: bool = True, timeout: float = 5):
         super().__init__(validator)
         positive_timeout('timeout', timeout)
@@ -36,6 +55,7 @@ class TcpTokenAuth(DependencyLifecycle):
         self._tokens: WeakKeyDictionary[Any, str] = WeakKeyDictionary()
 
     async def verify(self, request: Any) -> str | None:
+        """Run the handshake on ``(reader, writer)``; return the principal, or close and return ``None``."""
         reader, writer = request
         try:
             _tls(writer, self._require_tls)
@@ -60,11 +80,20 @@ class TcpTokenAuth(DependencyLifecycle):
             raise
 
     async def revalidate(self, connection: Any) -> str | None:
+        """Validate the connection's token again; ``None`` means it is no longer accepted."""
         token = self._tokens.get(connection[1])
         return await validated(self._validator, token) if token is not None else None
 
 
 class TcpTokenClientAuth:
+    """Client side of the TCP token handshake.
+
+    Args:
+        token: The token to present.
+        require_tls: Refuse to send the token without TLS.
+        timeout: Seconds allowed for the handshake.
+    """
+
     def __init__(self, token: str, *, require_tls: bool = True, timeout: float = 5):
         if not token_text(token, 16000):
             raise ValueError('Invalid token')
@@ -72,6 +101,11 @@ class TcpTokenClientAuth:
         self._token, self._require_tls, self._timeout = token, require_tls, timeout
 
     async def authenticate(self, connection: Any) -> None:
+        """Send the token and wait for the server to accept it.
+
+        Raises:
+            PermissionError: The server rejected it, or TLS is required but missing.
+        """
         reader, writer = connection
         try:
             _tls(writer, self._require_tls)
@@ -86,6 +120,7 @@ class TcpTokenClientAuth:
 
 class HmacChallengeAuth:
     """Version 1 binds a fresh nonce and client ID to the proof. TLS remains required by default."""
+
     def __init__(self, keys: Mapping[str, tuple[str, bytes]], *, require_tls: bool = True, timeout: float = 5):
         positive_timeout('timeout', timeout)
         self._keys = dict(keys)
@@ -98,6 +133,7 @@ class HmacChallengeAuth:
         self._verified: WeakKeyDictionary[Any, tuple[str, bytes]] = WeakKeyDictionary()
 
     async def verify(self, request: Any) -> str | None:
+        """Run the handshake on ``(reader, writer)``; return the principal, or close and return ``None``."""
         reader, writer = request
         try:
             _tls(writer, self._require_tls)
@@ -123,6 +159,7 @@ class HmacChallengeAuth:
             raise
 
     async def revalidate(self, connection: Any) -> str | None:
+        """Return the principal if the key used is still configured unchanged, else ``None``."""
         verified = self._verified.get(connection[1])
         if verified is None:
             return None
@@ -133,6 +170,15 @@ class HmacChallengeAuth:
 
 
 class HmacChallengeClientAuth:
+    """Client side of the HMAC challenge-response handshake.
+
+    Args:
+        key_id: Which server-side key to use.
+        secret: The shared secret; at least 32 bytes.
+        require_tls: Refuse to authenticate without TLS.
+        timeout: Seconds allowed for the handshake.
+    """
+
     def __init__(self, key_id: str, secret: bytes, *, require_tls: bool = True, timeout: float = 5):
         self._key_id = identity(key_id).encode()
         if len(self._key_id) > 255 or not isinstance(secret, bytes) or len(secret) < 32:
@@ -141,6 +187,12 @@ class HmacChallengeClientAuth:
         self._secret, self._require_tls, self._timeout = secret, require_tls, timeout
 
     async def authenticate(self, connection: Any) -> None:
+        """Answer the server's challenge and wait for acceptance.
+
+        Raises:
+            PermissionError: The challenge was malformed, the server rejected the
+                proof, or TLS is required but missing.
+        """
         reader, writer = connection
         try:
             _tls(writer, self._require_tls)

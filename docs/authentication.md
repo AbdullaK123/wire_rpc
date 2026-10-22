@@ -191,8 +191,7 @@ must provision them first). No backend silently opens or closes an injected pool
 ## Adversarial verification
 
 ```sh
-uv run --locked mypy
-uv run --locked pyright
+uv run --locked pyrefly check
 uv run --locked pytest -q -W error
 # Run only the Docker-backed cases:
 uv run --locked pytest -q -W error -m integration

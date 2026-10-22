@@ -1,7 +1,119 @@
 # wire_rpc
 
-Typed asyncio RPC with JSON/Pydantic/MessagePack codecs and TCP, HTTP,
-WebSocket, and stdio transports.
+Typed asyncio JSON-RPC 2.0 with JSON/Pydantic/MessagePack codecs and TCP, HTTP,
+WebSocket, stdio, and in-process thread transports.
+
+## Quick start
+
+A server registers handlers on an `App`. The type hint on `params` sets how
+incoming params are validated, and the return hint sets how the result is encoded.
+
+```python
+# server.py
+import msgspec
+from wire_rpc import App
+from wire_rpc.transports.tcp import TcpServerTransport
+
+
+class AddParams(msgspec.Struct):
+    a: int
+    b: int
+
+
+app = App(TcpServerTransport(host="127.0.0.1", port=9000))
+
+
+@app.method("add")
+async def add(params: AddParams, ctx) -> int:
+    return params.a + params.b
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+A client calls a method by name and names the type it expects back:
+
+```python
+# client.py
+import asyncio
+from wire_rpc import Client
+from wire_rpc.transports.tcp import TcpClientTransport
+
+
+async def main():
+    async with Client(TcpClientTransport(host="127.0.0.1", port=9000)) as client:
+        print(await client.call("add", int, {"a": 2, "b": 3}))  # 5
+
+
+asyncio.run(main())
+```
+
+A server error reaches the client as `WireRpcError`, which carries the JSON-RPC
+`code` and `message`. Handler exception details are never sent to the client.
+
+Handlers take `(ctx)` or `(params, ctx)`. `ctx` is whatever the
+`@app.on_startup` hook returned, such as a database pool. Trusted request
+metadata, including the authenticated principal, comes from `current_request()`.
+Group related methods with `Router("prefix")`, and wrap them with
+`@app.middleware` or `@router.middleware`.
+
+## Transports
+
+`App` serves one peer, and requests run one at a time. `MulticastApp` serves many
+peers, each identified by a `client_id`, and can broadcast notifications to all of them.
+
+| Transport | Use with | Notes |
+|---|---|---|
+| `TcpServerTransport` / `TcpClientTransport` | `App` / `Client` | Length-prefixed frames, optional TLS. The server serves one connection; the app stops when it closes. |
+| `TcpMulticastServerTransport` | `MulticastApp` | Many TCP clients, bounded per-client queues. |
+| `HttpServerTransport` / `HttpClientTransport` | `App` / `Client` | One `POST /rpc` per call. Text codecs only. |
+| `WsServerTransport` / `WsClientTransport` | `App` / `Client` | One WebSocket connection on `/ws`. Text codecs only. |
+| `MulticastWsServerTransport` | `MulticastApp` | Many WebSocket clients, for browsers. |
+| `StdIoTransport` / `StdIoServerTransport` | `Client` / `App` | Talk to a child process over its stdin/stdout. |
+| `ThreadTransport` | `App` + `Client` | Two threads in one process, each with its own event loop. |
+
+Every transport enforces a maximum message size. Authentication is set per transport with
+`auth=`; see the [authentication suite](docs/authentication.md).
+
+### Between threads
+
+`ThreadTransport.pair()` returns two connected ends. Give one to each thread;
+each end binds to the event loop of the thread that connects it. Sending copies
+the message, and an end that is full (`max_queue_size` unread messages) rejects
+new sends instead of growing without limit.
+
+```python
+import asyncio
+import threading
+import time
+
+from wire_rpc import App, Client
+from wire_rpc.transports import ThreadTransport
+
+client_end, server_end = ThreadTransport.pair()
+app = App(server_end)
+
+
+@app.method("add")
+async def add(params: dict, ctx) -> int:
+    return params["a"] + params["b"]
+
+
+threading.Thread(target=app.run, daemon=True).start()
+time.sleep(0.2)  # see the limitation below
+
+
+async def main():
+    async with Client(client_end) as client:
+        print(await client.call("add", int, {"a": 2, "b": 3}))  # 5
+
+
+asyncio.run(main())
+```
+
+**Limitation:** a send fails with `ConnectionError` until the other end has
+connected, and there is no readiness signal yet. That is why the example sleeps.
 
 ## Development and release checks
 
@@ -12,19 +124,14 @@ To explicitly run only tests without Docker: `uv run --locked pytest -q -W error
 
 ```sh
 uv sync --locked
-uv run --locked mypy
-uv run --locked pyright
+uv run --locked pyrefly check
 uv run --locked pytest -q -W error
 uv build --no-sources
 uv run --locked python scripts/check_wheel.py
 ```
 
-Mypy checks function bodies even when signatures are unannotated. Pyright runs
-in standard mode with a Python 3.12 language baseline. Both check the package,
-tests, and release scripts, and both run in CI. In VS Code, select the project's
-`.venv` interpreter so Pylance resolves the same installed dependencies; it reads
-the shared `[tool.pyright]` configuration. Pylance's editor extension itself is
-not run by CI.
+Pyrefly checks the package, tests, and release scripts against a Python 3.12
+baseline, configured in `[tool.pyrefly]`, and runs in CI.
 
 Tests are organized by attack surface. Concurrency tests use events and
 controlled ordering; socket tests use ephemeral ports. Test timeouts are

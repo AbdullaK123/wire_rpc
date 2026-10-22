@@ -8,12 +8,20 @@ from wire_rpc.auth.sessions._base import SessionStoreBase
 
 
 class InMemorySessionStore(SessionStoreBase):
+    """Sessions held in this process's memory; lost on restart and not shared.
+
+    Args:
+        ttl: Session lifetime in seconds.
+        max_sessions: Most live sessions.
+    """
+
     def __init__(self, ttl: float = 86400, *, max_sessions: int = 10000):
         super().__init__(ttl, max_sessions=max_sessions)
         self._sessions: dict[str, tuple[str, float]] = {}
         self._expiry: list[tuple[float, str]] = []
 
     def _prune(self) -> None:
+        """Drop expired sessions, and rebuild the expiry heap if stale entries pile up."""
         now = time.monotonic()
         while self._expiry and self._expiry[0][0] <= now:
             expiry, key = heapq.heappop(self._expiry)
@@ -25,6 +33,7 @@ class InMemorySessionStore(SessionStoreBase):
             heapq.heapify(self._expiry)
 
     async def _execute(self, operation: str, key: str = '', value: str = '', new_key: str = '') -> Any:
+        """Run one session operation; nothing here awaits, so each is atomic."""
         self._prune()
         if operation == 'create':
             if key in self._sessions:

@@ -1,3 +1,5 @@
+"""Errors raised when authentication cannot reach a decision."""
+
 class AuthUnavailableError(Exception):
     """Authentication could not be decided; never treat as anonymous success."""
 

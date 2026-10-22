@@ -1,4 +1,10 @@
 
+"""A minimal shared-secret handshake for TCP.
+
+The secret itself is sent over the connection and TLS is not enforced. Prefer
+``TcpTokenAuth`` or ``HmacChallengeAuth`` from ``wire_rpc.auth``.
+"""
+
 from wire_rpc.auth._util import identity
 import asyncio
 import hmac
@@ -6,6 +12,14 @@ from typing import Any
 
 
 class SharedSecretAuth:
+    """Both sides hold the same secret; the client sends it and the server compares.
+
+    One object can be used on both the server (``auth=``) and the client.
+
+    Args:
+        secret: The shared secret.
+        principal: The identity given to every client that knows the secret.
+    """
 
     def __init__(
         self,
@@ -16,6 +30,11 @@ class SharedSecretAuth:
         self._secret = secret.encode() if isinstance(secret, str) else secret
 
     async def authenticate(self, connection) -> None:
+        """Client side: send the secret and wait for ``OK``.
+
+        Raises:
+            PermissionError: The server rejected the secret.
+        """
         reader, writer = connection
         writer.write(len(self._secret).to_bytes(4, 'big') + self._secret)
         await writer.drain()
@@ -24,13 +43,16 @@ class SharedSecretAuth:
             raise PermissionError('Authentication rejected')
 
     async def login(self, request: Any) -> Any:
+        """No-op; this authenticator has no login flow."""
         return None
 
     async def logout(self, request: Any) -> Any:
+        """No-op; this authenticator has no logout flow."""
         return None
 
     async def verify(self, request: Any):
 
+        """Server side: read the secret and return the principal if it matches, else close and return ``None``."""
         reader: asyncio.StreamReader = request[0]
         writer: asyncio.StreamWriter = request[1]
 

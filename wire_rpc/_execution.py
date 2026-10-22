@@ -18,6 +18,7 @@ class PeerBusyError(Exception):
 
 @dataclass
 class ExecutionStats:
+    """Counters describing request outcomes; safe to expose because they hold no request data."""
     requests: int = 0
     active: int = 0
     completed: int = 0
@@ -26,10 +27,23 @@ class ExecutionStats:
     invalid: int = 0
 
     def snapshot(self):
+        """Return the counters as a plain dict."""
         return asdict(self)
 
 
 async def process(app, data: bytes, dispatch: Callable[[RawWireRequest], Awaitable], client_id=None):
+    """Decode, dispatch and encode one request without letting failures escape.
+
+    Args:
+        app: The owning ``App`` or ``MulticastApp``; supplies codec, limits and stats.
+        data: The raw encoded request.
+        dispatch: Routes a validated request to its handler.
+        client_id: The multicast peer that sent the request, if any.
+
+    Returns:
+        The encoded response, or ``None`` for a notification. Handler errors are
+        mapped to sanitized JSON-RPC errors; only cancellation propagates.
+    """
     codec = app._codec
     stats = app._stats
     stats.requests += 1

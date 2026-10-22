@@ -15,6 +15,7 @@ from typing import Annotated
 
 
 class WireRequest[P](Struct):
+    """A JSON-RPC 2.0 request whose ``params`` are typed as ``P``. Leave ``id`` unset to send a notification."""
     method: Annotated[str, Meta(min_length=1, max_length=255)]
     id: Annotated[str, Meta(max_length=255)] | Annotated[int, Meta(ge=-(2**63), le=2**63-1)] | None | UnsetType = UNSET
     params: Optional[P] = None
@@ -22,6 +23,7 @@ class WireRequest[P](Struct):
 
 
 class RawWireRequest(Struct):
+    """A JSON-RPC 2.0 request with undecoded ``params``; the server converts them per handler."""
     method: Annotated[str, Meta(min_length=1, max_length=255)]
     id: Annotated[str, Meta(max_length=255)] | Annotated[int, Meta(ge=-(2**63), le=2**63-1)] | None | UnsetType = UNSET
     params: Optional[Any] = None

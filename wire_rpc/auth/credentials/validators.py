@@ -16,10 +16,17 @@ from wire_rpc.auth.sessions.protocol import SessionStore
 
 
 class CallbackCredentialValidator:
+    """Wraps your own async function as a credential validator.
+
+    The callback gets the login body as a dict and returns a principal or ``None``.
+    Any exception it raises becomes ``AuthUnavailableError``.
+    """
+
     def __init__(self, callback: Callable[[dict[str, Any]], Awaitable[str | None]]):
         self._callback = callback
 
     async def validate(self, credentials: dict[str, Any]) -> str | None:
+        """Call the callback and check that any principal it returns is valid."""
         if type(credentials) is not dict:
             return None
         try:
@@ -31,12 +38,31 @@ class CallbackCredentialValidator:
 
 @dataclass(frozen=True)
 class PasswordAccount:
+    """A stored account for password login.
+
+    Attributes:
+        principal: The identity a successful login produces.
+        password_hash: An Argon2 hash of the password.
+        enabled: Disabled accounts always fail to log in.
+    """
     principal: str
     password_hash: str
     enabled: bool = True
 
 
 class PasswordCredentialValidator:
+    """Checks ``{"username": ..., "password": ...}`` against Argon2 password hashes.
+
+    Unknown usernames are checked against a dummy hash so they take as long as real
+    ones. Hashing runs in a worker thread, at most ``max_concurrency`` at a time;
+    beyond that, logins fail fast with ``AuthUnavailableError``. Needs the
+    ``password`` extra.
+
+    Args:
+        lookup: Fetches the account for a username, or ``None``.
+        max_concurrency: Most password checks running at once.
+    """
+
     def __init__(self, lookup: Callable[[str], Awaitable[PasswordAccount | None]], *, max_concurrency: int = 4):
         from argon2 import PasswordHasher
         positive_limit('max_concurrency', max_concurrency)
@@ -47,6 +73,11 @@ class PasswordCredentialValidator:
         self._active = 0
 
     async def validate(self, credentials: dict[str, Any]) -> str | None:
+        """Return the account's principal if the password matches, else ``None``.
+
+        Raises:
+            AuthUnavailableError: At capacity, the lookup failed, or a stored hash is invalid.
+        """
         from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
         if type(credentials) is not dict:
             return None
@@ -99,6 +130,8 @@ class PasswordCredentialValidator:
 
 
 class StaticPasswordCredentialValidator(PasswordCredentialValidator):
+    """A ``PasswordCredentialValidator`` over a fixed username-to-account mapping."""
+
     def __init__(self, accounts: Mapping[str, PasswordAccount], *, max_concurrency: int = 4):
         snapshot = dict(accounts)
         async def lookup(username: str) -> PasswordAccount | None:
@@ -108,12 +141,21 @@ class StaticPasswordCredentialValidator(PasswordCredentialValidator):
 
 @dataclass(frozen=True)
 class ApiKeyRecord:
+    """A stored API key. Only the SHA-256 digest of the secret is kept.
+
+    Attributes:
+        principal: The identity the key grants.
+        secret_digest: SHA-256 hex of the secret part of the key.
+        expires_at: Unix time after which the key stops working, or ``None``.
+        enabled: Disabled keys always fail.
+    """
     principal: str
     secret_digest: str
     expires_at: float | None = None
     enabled: bool = True
 
     def __post_init__(self) -> None:
+        """Reject invalid fields."""
         identity(self.principal)
         if re.fullmatch(r'[0-9a-f]{64}', self.secret_digest) is None:
             raise ValueError('API key digest must be SHA-256 hex')
@@ -124,6 +166,11 @@ class ApiKeyRecord:
 
     @classmethod
     def from_secret(cls, principal: str, secret: str, *, expires_at: float | None = None) -> 'ApiKeyRecord':
+        """Build a record from a plaintext secret, storing only its digest.
+
+        Raises:
+            ValueError: The secret is under 32 characters or not printable ASCII.
+        """
         identity(principal)
         if not token_text(secret) or len(secret) < 32:
             raise ValueError('API keys require at least 32 characters of high-entropy secret material')
@@ -132,10 +179,21 @@ class ApiKeyRecord:
 
 class ApiKeyValidator:
     """Tokens are key_id.secret. Lookup is live, so revocation applies to the next check."""
+
     def __init__(self, lookup: Callable[[str], Awaitable[ApiKeyRecord | None]]):
+        """Create the validator.
+
+        Args:
+            lookup: Fetches the record for a key id, or ``None``.
+        """
         self._lookup = lookup
 
     async def validate(self, token: str) -> str | None:
+        """Return the principal for a ``key_id.secret`` token, or ``None``.
+
+        Raises:
+            AuthUnavailableError: The lookup failed.
+        """
         if not token_text(token) or '.' not in token:
             return None
         key_id, secret = token.split('.', 1)
@@ -156,9 +214,12 @@ class ApiKeyValidator:
 
 
 class SessionTokenValidator(DependencyLifecycle):
+    """Uses session ids from a ``SessionStore`` as bearer tokens."""
+
     def __init__(self, store: SessionStore):
         super().__init__(store)
         self._store = store
 
     async def validate(self, token: str) -> str | None:
+        """Return the session's principal, or ``None`` if it is unknown or expired."""
         return await self._store.validate(token)

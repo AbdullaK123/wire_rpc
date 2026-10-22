@@ -5,6 +5,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class RequestContext:
+    """Trusted metadata for the request being handled.
+
+    Attributes:
+        request_id: The JSON-RPC id, or ``None`` for a notification.
+        method: The method name being called.
+        principal: The identity the transport authenticated, or ``None``.
+        connection_id: The multicast peer id, or ``None`` on unicast transports.
+    """
     request_id: str | int | None
     method: str
     principal: str | None

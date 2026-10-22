@@ -6,6 +6,20 @@ from wire_rpc.auth.errors import AuthUnavailableError
 
 
 class JwtTokenValidator:
+    """Verifies signed JWTs against keys you supply; never fetches keys from URLs in the token.
+
+    The token's ``kid`` header selects the key, and its ``sub`` claim becomes the
+    principal. ``exp``, ``iat``, ``iss``, ``aud`` and ``sub`` are all required.
+    Needs the ``jwt`` extra.
+
+    Args:
+        keys: Key id mapped to the verification key. HMAC keys need 32+ bytes.
+        algorithm: The one algorithm accepted, e.g. ``"RS256"``.
+        issuer: Required ``iss`` value.
+        audience: Required ``aud`` value.
+        leeway: Seconds of clock skew allowed, 0 to 60.
+    """
+
     def __init__(self, keys: Mapping[str, Any], *, algorithm: str, issuer: str, audience: str, leeway: float = 0):
         import jwt
         if algorithm not in {'RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'EdDSA', 'HS256', 'HS384', 'HS512'}:
@@ -18,6 +32,11 @@ class JwtTokenValidator:
         self._algorithm, self._issuer, self._audience, self._leeway = algorithm, issuer, audience, leeway
 
     async def validate(self, token: str) -> str | None:
+        """Return the token's subject if the token is valid, else ``None``.
+
+        Raises:
+            AuthUnavailableError: Verification failed for a reason other than a bad token.
+        """
         if not token_text(token, 16384):
             return None
         try:

@@ -5,11 +5,19 @@ from wire_rpc.auth.protocol import TokenValidator
 
 
 class BearerAuth(DependencyLifecycle):
+    """Authenticates requests with an ``Authorization: Bearer <token>`` header.
+
+    Args:
+        validator: Maps a token to a principal, e.g. ``JwtValidator``.
+        require_tls: Reject requests that did not arrive over HTTPS.
+    """
+
     def __init__(self, validator: TokenValidator, *, require_tls: bool = True):
         super().__init__(validator)
         self._validator, self._require_tls = validator, require_tls
 
     async def verify(self, request: web.Request) -> str | None:
+        """Return the principal for the request's bearer token, or ``None``."""
         if self._require_tls and not request.secure:
             return None
         values = request.headers.getall('Authorization', [])
@@ -22,6 +30,14 @@ class BearerAuth(DependencyLifecycle):
 
 
 class ApiKeyAuth(DependencyLifecycle):
+    """Authenticates requests with an API key header.
+
+    Args:
+        validator: Maps a key to a principal.
+        header: The header carrying the key.
+        require_tls: Reject requests that did not arrive over HTTPS.
+    """
+
     def __init__(self, validator: TokenValidator, *, header: str = 'X-API-Key', require_tls: bool = True):
         import re
         if re.fullmatch(r'[A-Za-z0-9-]{1,64}', header) is None:
@@ -30,6 +46,7 @@ class ApiKeyAuth(DependencyLifecycle):
         self._validator, self._header, self._require_tls = validator, header, require_tls
 
     async def verify(self, request: web.Request) -> str | None:
+        """Return the principal for the request's API key, or ``None``."""
         if self._require_tls and not request.secure:
             return None
         values = request.headers.getall(self._header, [])

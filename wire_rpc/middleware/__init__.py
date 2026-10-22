@@ -1,3 +1,5 @@
+"""Types for request middleware."""
+
 from .protocol import Middleware, Next
 
 __all__ = [

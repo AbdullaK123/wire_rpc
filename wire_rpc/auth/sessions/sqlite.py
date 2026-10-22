@@ -10,6 +10,20 @@ from wire_rpc._validation import positive_timeout, positive_limit
 
 
 class SQLiteSessionStore(SessionStoreBase):
+    """Sessions in a SQLite file, shared by processes on the same machine.
+
+    Each operation runs in its own ``BEGIN IMMEDIATE`` transaction on a worker
+    thread. At most ``max_concurrency`` run at once; beyond that, calls fail fast
+    with ``AuthUnavailableError``.
+
+    Args:
+        path: Database file path; ``:memory:`` is refused.
+        ttl: Session lifetime in seconds.
+        max_sessions: Most live sessions.
+        timeout: Seconds to wait for another writer's lock.
+        max_concurrency: Most operations running at once.
+    """
+
     def __init__(self, path: str, ttl: float = 86400, *, max_sessions: int = 10000, timeout: float = 5, max_concurrency: int = 4):
         super().__init__(ttl, max_sessions=max_sessions)
         positive_timeout('timeout', timeout)
@@ -21,19 +35,27 @@ class SQLiteSessionStore(SessionStoreBase):
         self._ready = False
 
     async def startup(self) -> None:
+        """Create the sessions table if needed and start accepting operations."""
         await asyncio.to_thread(self._initialize)
         self._ready = True
 
     def _initialize(self) -> None:
+        """Create the table and indexes; runs on a worker thread."""
         with sqlite3.connect(self._path, timeout=self._timeout) as db:
             db.execute('CREATE TABLE IF NOT EXISTS wire_sessions (digest TEXT PRIMARY KEY, principal TEXT NOT NULL, value TEXT NOT NULL, expires REAL NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_expiry ON wire_sessions(expires)')
             db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_principal ON wire_sessions(principal)')
 
     async def shutdown(self) -> None:
+        """Stop accepting operations."""
         self._ready = False
 
     async def _execute(self, operation: str, key: str = '', value: str = '', new_key: str = '') -> Any:
+        """Run one operation on a worker thread, keeping its slot reserved until the thread finishes.
+
+        Raises:
+            AuthUnavailableError: Not started, or at capacity.
+        """
         if not self._ready:
             raise AuthUnavailableError('Session store not started')
         # The thread owns its connection and transaction through commit/rollback,
@@ -59,6 +81,7 @@ class SQLiteSessionStore(SessionStoreBase):
                 self._active -= 1
 
     def _transaction(self, operation: str, key: str, value: str, new_key: str) -> Any:
+        """Run one operation in a fresh connection and transaction; runs on a worker thread."""
         db = sqlite3.connect(self._path, timeout=self._timeout)
         try:
             db.execute('BEGIN IMMEDIATE')

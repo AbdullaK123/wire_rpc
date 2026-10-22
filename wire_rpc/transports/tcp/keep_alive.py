@@ -1,3 +1,5 @@
+"""OS-level TCP keepalive, which detects peers that vanished without closing."""
+
 import asyncio
 import socket
 from dataclasses import dataclass
@@ -5,11 +7,19 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class TcpKeepaliveConfig:
+    """How the OS probes an idle connection.
+
+    Args:
+        idle: Seconds of silence before the first probe.
+        interval: Seconds between probes.
+        count: Unanswered probes before the connection is dropped.
+    """
     idle: int = 60
     interval: int = 15
     count: int = 4
 
     def __post_init__(self) -> None:
+        """Reject non-positive settings."""
         if self.idle <= 0:
             raise ValueError("Keepalive idle must be greater than zero")
         if self.interval <= 0:
@@ -22,6 +32,10 @@ def configure_keepalive(
     writer: asyncio.StreamWriter,
     config: TcpKeepaliveConfig,
 ) -> None:
+    """Enable keepalive on ``writer``'s socket, applying each option the platform supports.
+
+    Closes ``writer`` and re-raises if configuration fails.
+    """
     try:
         sock = writer.get_extra_info("socket")
 

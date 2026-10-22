@@ -37,6 +37,30 @@ type ShutdownHook = Callable[[Any], Awaitable[None]]
 
 
 class App:
+    """A JSON-RPC 2.0 server for a transport with a single peer.
+
+    Requests are handled one at a time, in order. Use ``MulticastApp`` for transports
+    with many peers.
+
+    Args:
+        transport: The connection to serve.
+        codec: Encodes and decodes messages; JSON via msgspec by default.
+        handler_timeout: Seconds a request may run before it fails with -32000.
+        startup_timeout: Seconds allowed for transport startup plus the startup hook.
+        shutdown_timeout: Seconds allowed for each shutdown step and for draining a
+            request in flight when ``stop()`` is called.
+        max_response_size: Largest encoded response in bytes. Capped by the
+            transport's ``max_message_size``; must leave at least 2048 bytes.
+
+    Usage:
+        app = App(StdIoServerTransport())
+
+        @app.method("add")
+        async def add(params: AddParams, ctx) -> int:
+            return params.a + params.b
+
+        app.run()
+    """
 
     def __init__(
         self,
@@ -75,14 +99,24 @@ class App:
         self._on_shutdown: Optional[ShutdownHook] = None
 
     async def _internal_startup(self):
+        """Start the transport if it has its own startup step."""
         if isinstance(self._transport, StartupComponent):
             await self._transport.startup()
 
     async def _internal_shutdown(self):
+         """Shut down the transport if it has its own shutdown step."""
          if isinstance(self._transport, StartupComponent):
              await self._transport.shutdown()
 
     def method(self, name: str) -> Callable:
+        """Register a handler for ``name``; use as ``@app.method("name")``.
+
+        The handler is ``async (ctx)`` or ``async (params, ctx)``. Incoming params are
+        converted to the type hint on ``params``, and the result to the return hint.
+
+        Raises:
+            TypeError: The handler's signature is not supported.
+        """
         def decorator(func: Handler) -> Handler:
             spec = inspect_handler(func, multicast=False)
             self._handlers[name] = func
@@ -97,6 +131,7 @@ class App:
         return decorator
 
     def include_router(self, router: Router) -> None:
+        """Register every handler in ``router`` and its children under their full dotted names."""
         entries = router._flatten()
         for name, entry in entries.items():
             self._handlers[name] = entry.handler
@@ -108,6 +143,11 @@ class App:
             )
 
     def middleware(self, func: Middleware) -> Middleware:
+        """Register app-wide middleware; use as ``@app.middleware``.
+
+        Middleware is ``async (request, ctx, next)`` and must call ``await next(request, ctx)``
+        to continue. App middleware runs before router middleware, in registration order.
+        """
         inspect_middleware(func)
         self._middleware.append(func)
         logger.info(
@@ -116,16 +156,22 @@ class App:
         return func
 
     def on_startup(self, func: StartupHook) -> StartupHook:
+        """Register the startup hook; use as ``@app.on_startup``.
+
+        Whatever the hook returns becomes the ``ctx`` passed to every handler.
+        """
         self._on_startup = func
         return func
 
     def on_shutdown(self, func: ShutdownHook) -> ShutdownHook:
+        """Register the shutdown hook; it receives the ``ctx`` returned by the startup hook."""
         self._on_shutdown = func
         return func
 
     async def _dispatch(self, request: RawWireRequest) -> WireResponse:
 
 
+        """Convert params, run the middleware chain and handler, and build the response."""
         if request.method not in self._handlers:
             logger.warning("RPC method not found")
             return WireErrorResponse(
@@ -175,6 +221,7 @@ class App:
 
     @property
     def stats(self) -> dict:
+        """Request counters: requests, active, completed, failed, timed_out and invalid."""
         return self._stats.snapshot()
 
     async def stop(self):
@@ -182,9 +229,11 @@ class App:
         self._stopping.set()
 
     async def _next(self, transport):
+        """Receive the next message, or raise ``ConnectionError`` once the app is stopping."""
         return await self._await_or_stop(transport.recv())
 
     async def _await_or_stop(self, operation):
+        """Await ``operation`` unless ``stop()`` is called first, then raise ``ConnectionError``."""
         receive = asyncio.create_task(operation)
         stopped = asyncio.create_task(self._stopping.wait())
         try:
@@ -199,6 +248,7 @@ class App:
             await asyncio.gather(receive, stopped, return_exceptions=True)
 
     async def _listen(self):
+        """Serve requests one at a time until the transport closes or the app stops."""
         async with self._transport as t:
             while not self._stopping.is_set():
                 try:
@@ -229,9 +279,15 @@ class App:
                     break
 
     def run(self):
+        """Run the app on a new event loop until the transport closes or ``stop()`` is called."""
         asyncio.run(self._run())
 
     async def _run(self):
+        """Start up, serve until stopped, then shut down in reverse order.
+
+        Raises:
+            RuntimeError: The app is already running or has already run once.
+        """
         if self._running or self._stopping.is_set():
             raise RuntimeError('Application is already running or stopped')
         self._running = True

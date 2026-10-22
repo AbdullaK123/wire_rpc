@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 
 def _call_target(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Return the function that actually runs when ``func`` is called."""
     if inspect.isfunction(func) or inspect.ismethod(func):
         return func
 

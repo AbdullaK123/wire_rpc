@@ -50,6 +50,12 @@ class Router:
     """
 
     def __init__(self, prefix: str, *, multicast: bool = False):
+        """Create an empty router.
+
+        Args:
+            prefix: Prepended to each method name, joined with a dot.
+            multicast: Accept multicast handler signatures, for use with ``MulticastApp``.
+        """
         self.prefix = prefix
         self._multicast = multicast
         self._handlers: dict[str, Handler] = {}

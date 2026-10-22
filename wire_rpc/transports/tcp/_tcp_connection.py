@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 
 @dataclass(slots=True)
 class TcpConnection:
+    """One TCP connection: its streams, authenticated identity, locks and activity clock.
+
+    The locks keep concurrent reads, and concurrent writes, from interleaving frames.
+    """
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     principal: str | None = None
@@ -19,13 +23,16 @@ class TcpConnection:
     last_activity_at: float = field(default_factory=time.monotonic)
 
     def touch(self) -> None:
+        """Record traffic now, resetting the idle clock."""
         self.last_activity_at = time.monotonic()
 
     @property
     def idle_for(self) -> float:
+        """Seconds since the last recorded traffic."""
         return time.monotonic() - self.last_activity_at
 
     async def close(self) -> None:
+        """Close the stream, aborting it if a graceful close fails or times out."""
         self.writer.close()
         try:
             async with asyncio.timeout(self.close_timeout):

@@ -27,6 +27,11 @@ class ConnectionLimiter:
         # There is intentionally no await between the capacity check and the
         # reservation. On the asyncio event loop this makes admission atomic
         # with respect to other tasks using this limiter.
+        """Hold one connection slot for the duration of the ``async with`` block.
+
+        Raises:
+            ConnectionLimitExceeded: Every slot is taken.
+        """
         if self._active >= self._limit:
             raise ConnectionLimitExceeded
 

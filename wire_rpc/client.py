@@ -28,6 +28,22 @@ class WireRpcError(Exception):
 
 
 class Client:
+    """Makes JSON-RPC 2.0 calls over a transport, one at a time.
+
+    Any transport or protocol failure during a call closes the client for good; create
+    a new one to reconnect. Concurrent ``call``s queue and run in turn.
+
+    Args:
+        transport: The connection to the server.
+        codec: Must match the server's codec; JSON via msgspec by default.
+        call_timeout: Seconds for ``connect()``, and for each ``call`` including time
+            spent waiting for an earlier call to finish.
+        close_timeout: Seconds allowed to close the transport.
+
+    Usage:
+        async with Client(transport) as client:
+            total = await client.call("add", int, {"a": 2, "b": 3})
+    """
 
     def __init__(
         self,
@@ -48,6 +64,11 @@ class Client:
         self._codec = codec
 
     async def connect(self):
+        """Open the transport.
+
+        Raises:
+            ConnectionError: The client was already closed.
+        """
         if self._closed:
             raise ConnectionError("Client is closed; create a new client")
         try:
@@ -58,11 +79,13 @@ class Client:
             raise
 
     async def close(self):
+        """Close the transport. The client cannot be reused."""
         self._closed = True
         async with asyncio.timeout(self._close_timeout):
             await self._transport.close()
 
     async def _abort(self):
+        """Close after a failure, keeping the original exception as the one that propagates."""
         self._closed = True
         try:
             await self.close()
@@ -70,6 +93,7 @@ class Client:
             pass  # Preserve the original failure, but never reuse this channel.
 
     async def __aenter__(self) -> Self:
+        """Connect and return this client."""
         await self.connect()
         return self
 
@@ -79,6 +103,7 @@ class Client:
         exc_val: BaseException | None,
         exc_tb: object,
     ):
+        """Close the client."""
         await self.close()
 
     async def call(
@@ -89,6 +114,14 @@ class Client:
     ) -> T:
         # The deadline includes admission waiting. A cancelled waiter does not
         # own the channel and must not close somebody else's active exchange.
+        """Call ``method`` and return its result converted to ``response_type``.
+
+        Raises:
+            WireRpcError: The server returned a JSON-RPC error.
+            ConnectionError: The client is closed, or the reply was malformed or did not
+                match the request. The client is closed afterwards.
+            TimeoutError: The call did not finish within ``call_timeout``.
+        """
         async with asyncio.timeout(self._call_timeout):
             async with self._call_lock:
                 if self._closed:
@@ -111,6 +144,7 @@ class Client:
 
     @staticmethod
     def _validate_response(envelope: dict, request_id: str) -> None:
+        """Reject a reply that is not a well-formed JSON-RPC 2.0 response to ``request_id``."""
         if (
             envelope.get("jsonrpc") != "2.0"
             or type(envelope.get("id")) is not str

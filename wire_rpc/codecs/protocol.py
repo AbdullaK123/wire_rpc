@@ -22,14 +22,31 @@ class CodecConversionError(CodecError):
 
 
 class Codec(Protocol):
+    """Turns messages into bytes and back, and converts decoded values to handler types.
+
+    Transports that only carry text check ``is_text`` on the codec, when present.
+    """
+
     def encode(self, obj: Any) -> bytes:
-        ...
+        """Encode ``obj`` to bytes.
+
+        Raises:
+            CodecEncodeError: ``obj`` cannot be encoded.
+        """
 
     def decode(self, data: bytes, target: Any) -> Any:
-        ...
+        """Decode ``data`` into an instance of ``target``.
+
+        Raises:
+            CodecDecodeError: ``data`` is malformed or does not match ``target``.
+        """
 
     def convert(self, obj: Any, target: Any) -> Any:
-        ...
+        """Convert an already-decoded value to ``target``; ``dict`` turns structs into plain dicts.
+
+        Raises:
+            CodecConversionError: ``obj`` does not match ``target``.
+        """
 
 
 __all__ = [

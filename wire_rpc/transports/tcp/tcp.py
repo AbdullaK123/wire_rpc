@@ -4,6 +4,8 @@ TCP transports for Wire RPC.
 TcpServerTransport — Server-side. Accepts one TCP connection
                       with 4-byte big-endian length-prefix framing.
 TcpClientTransport — Client-side. Connects to a TCP server.
+TcpMulticastServerTransport — Server-side. Accepts many TCP connections,
+                              each identified by a client_id.
 
 Pure asyncio. Zero dependencies beyond stdlib.
 """
@@ -40,6 +42,17 @@ async def _read_frame(
     read_timeout: float,
     idle_timeout: float | None,
 ) -> bytes:
+    """Read one length-prefixed frame from ``connection``.
+
+    The idle deadline applies while waiting for the first byte; the read deadline
+    applies to the rest of the frame.
+
+    Raises:
+        IdleTimeoutError: Nothing arrived within the idle deadline.
+        InvalidFrameSizeError: The length is zero or above ``max_frame_size``.
+        TimeoutError: The rest of the frame did not arrive within ``read_timeout``.
+        asyncio.IncompleteReadError: The peer closed mid-frame.
+    """
     if idle_timeout is None:
         first_header_byte = await connection.reader.readexactly(1)
     else:
@@ -70,6 +83,7 @@ def _ensure_not_idle(
     connection: TcpConnection,
     idle_timeout: float | None,
 ) -> None:
+    """Raise ``IdleTimeoutError`` if the connection has been idle for ``idle_timeout`` or longer."""
     if idle_timeout is not None and connection.idle_for >= idle_timeout:
         raise IdleTimeoutError
 
@@ -79,6 +93,7 @@ def _track_operation(
     inflight: set[asyncio.Task[object]],
     closing: bool,
 ) -> Generator[None, None, None]:
+    """Register the current task as in flight so ``close`` can wait for it; refuse if closing."""
     if closing:
         raise ConnectionError("Transport is closing")
 
@@ -97,6 +112,7 @@ async def _drain_tasks(
     tasks: set[asyncio.Task[object]],
     timeout: float,
 ) -> None:
+    """Wait up to ``timeout`` for ``tasks`` to finish, then cancel the rest. Skips the calling task."""
     current = asyncio.current_task()
     tracked = {
         task
@@ -120,6 +136,7 @@ async def _drain_tasks(
 
 
 async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close a stream, aborting it if a graceful close fails or takes over five seconds."""
     writer.close()
     try:
         async with asyncio.timeout(5.0):
@@ -131,6 +148,29 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
 
 
 class TcpServerTransport:
+    """Listens on TCP and serves exactly one client connection.
+
+    Frames are a 4-byte big-endian length followed by the payload. Later clients are
+    turned away while one is connected. ``connect()`` waits for that client;
+    ``async with`` only starts listening, and ``recv`` waits for the client instead.
+
+    Args:
+        host: Address to listen on.
+        port: Port to listen on; 0 picks a free port.
+        max_frame_size: Largest frame in bytes, at most 4 GiB - 1.
+        read_timeout: Seconds to finish reading a frame once its first byte arrives.
+        write_timeout: Seconds ``send`` waits for the socket to drain.
+        idle_timeout: Seconds without traffic before the connection is dropped;
+            ``None`` disables it.
+        ssl_handshake_timeout: Seconds for the TLS handshake (TLS only).
+        ssl_shutdown_timeout: Seconds for the TLS close (TLS only).
+        ssl_context: Enables TLS when set.
+        keep_alive: OS-level TCP keepalive settings; ``None`` disables them.
+        shutdown_timeout: Seconds ``close`` waits for in-flight operations before
+            cancelling them.
+        auth: Authenticates each connection before any frame is read.
+        auth_timeout: Seconds allowed for authentication.
+    """
 
     def __init__(
         self,
@@ -188,14 +228,17 @@ class TcpServerTransport:
         self._connect_task: asyncio.Task[None] | None = None
 
     async def startup(self):
+        """Start the authenticator if it has a startup step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
 
     async def shutdown(self):
+        """Shut down the authenticator if it has a shutdown step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
 
     async def _start(self) -> None:
+        """Start listening."""
         with _track_operation(self._inflight, self._closing):
             server = await asyncio.start_server(
                 self._handle_client,
@@ -215,6 +258,11 @@ class TcpServerTransport:
             logger.info(f"TCP server listening on {self._host}:{self._port}")
 
     async def connect(self) -> None:
+        """Start listening and wait for the one client to connect and authenticate.
+
+        Raises:
+            ConnectionError: The transport was closed while waiting.
+        """
         await self._start()
         await self._connected.wait()
         if self._closing:
@@ -225,6 +273,7 @@ class TcpServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Accept, authenticate and keep a new connection, or close it if one is already held."""
         task = asyncio.current_task()
         if task is not None:
             self._connection_tasks.add(task)
@@ -269,6 +318,7 @@ class TcpServerTransport:
                 self._connection_tasks.discard(task)
 
     async def close(self) -> None:
+        """Stop listening, wait for or cancel in-flight work, and close the client connection."""
         self._closing = True
 
         if self._server:
@@ -301,9 +351,16 @@ class TcpServerTransport:
 
     @property
     def max_message_size(self):
+        """Largest frame in bytes."""
         return self._max_frame_size
 
     async def get_principal(self, client_id=None):
+        """Return the client's authenticated identity, re-checking credentials if the authenticator supports it.
+
+        Raises:
+            PermissionError: The client disconnected, or its credentials were revoked
+                or expired; in that case the connection is closed.
+        """
         connection = self._connection
         if connection is None or connection.writer.is_closing():
             raise PermissionError('Peer disconnected')
@@ -319,6 +376,13 @@ class TcpServerTransport:
         return connection.principal
 
     async def recv(self) -> bytes:
+        """Wait for a client, then read its next frame.
+
+        Any read failure closes the connection, since the stream position is lost.
+
+        Raises:
+            ConnectionError: The transport or connection is closed.
+        """
         with _track_operation(self._inflight, self._closing):
             await self._connected.wait()
 
@@ -345,6 +409,13 @@ class TcpServerTransport:
                     raise
 
     async def send(self, data: bytes) -> None:
+        """Send one frame to the client.
+
+        Raises:
+            InvalidFrameSizeError: ``data`` is empty or above ``max_frame_size``.
+            ConnectionError: No client is connected, or the connection is closed.
+            IdleTimeoutError: The connection went idle; it is closed.
+        """
         with _track_operation(self._inflight, self._closing):
             connection = self._connection
             if connection is None:
@@ -373,6 +444,7 @@ class TcpServerTransport:
                 raise
 
     async def __aenter__(self) -> Self:
+        """Start listening and return this transport, without waiting for a client."""
         await self._start()
         return self
 
@@ -382,10 +454,30 @@ class TcpServerTransport:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
+        """Close the transport."""
         await self.close()
 
 
 class TcpClientTransport:
+    """Connects to a TCP server and exchanges length-prefixed frames.
+
+    Args:
+        host: Server address.
+        port: Server port.
+        max_frame_size: Largest frame in bytes, at most 4 GiB - 1.
+        read_timeout: Seconds to finish reading a frame once its first byte arrives.
+        write_timeout: Seconds ``send`` waits for the socket to drain.
+        idle_timeout: Seconds without traffic before the connection is dropped;
+            ``None`` disables it.
+        ssl_handshake_timeout: Seconds for the TLS handshake (TLS only).
+        ssl_shutdown_timeout: Seconds for the TLS close (TLS only).
+        ssl_context: Enables TLS when set.
+        keep_alive: OS-level TCP keepalive settings; ``None`` disables them.
+        shutdown_timeout: Seconds ``close`` waits for in-flight operations before
+            cancelling them.
+        connect_timeout: Seconds for the TCP connect, TLS handshake and authentication.
+        auth: Proves this client's identity to the server after connecting.
+    """
 
     def __init__(
         self,
@@ -440,6 +532,12 @@ class TcpClientTransport:
         self._inflight: set[asyncio.Task[object]] = set()
 
     async def connect(self) -> None:
+        """Connect, apply keepalive settings and authenticate.
+
+        Raises:
+            RuntimeError: Already connected or connecting.
+            TimeoutError: Not done within ``connect_timeout``.
+        """
         if self._connecting or self._connection is not None:
             raise RuntimeError('Connection already exists or is in progress')
         self._connecting = True
@@ -466,6 +564,7 @@ class TcpClientTransport:
             self._connecting = False
 
     async def close(self) -> None:
+        """Wait for or cancel in-flight work, then close the connection."""
         self._closing = True
 
         await _drain_tasks(
@@ -479,15 +578,28 @@ class TcpClientTransport:
 
     @property
     def max_message_size(self):
+        """Largest frame in bytes."""
         return self._max_frame_size
 
     async def get_principal(self, client_id=None):
+        """Return the identity recorded for the server connection.
+
+        Raises:
+            PermissionError: Not connected, or the connection has closed.
+        """
         connection = self._connection
         if connection is None or connection.writer.is_closing():
             raise PermissionError('Peer disconnected')
         return connection.principal
 
     async def recv(self) -> bytes:
+        """Read the next frame from the server.
+
+        Any read failure closes the connection, since the stream position is lost.
+
+        Raises:
+            ConnectionError: Not connected, or the connection is closed.
+        """
         with _track_operation(self._inflight, self._closing):
             connection = self._connection
             if connection is None:
@@ -509,6 +621,13 @@ class TcpClientTransport:
                     raise
 
     async def send(self, data: bytes) -> None:
+        """Send one frame to the server.
+
+        Raises:
+            InvalidFrameSizeError: ``data`` is empty or above ``max_frame_size``.
+            ConnectionError: Not connected, or the connection is closed.
+            IdleTimeoutError: The connection went idle; it is closed.
+        """
         with _track_operation(self._inflight, self._closing):
             connection = self._connection
             if connection is None:
@@ -537,6 +656,7 @@ class TcpClientTransport:
                 raise
 
     async def __aenter__(self) -> Self:
+        """Connect and return this transport."""
         await self.connect()
         return self
 
@@ -546,10 +666,38 @@ class TcpClientTransport:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
+        """Close the transport."""
         await self.close()
 
 
 class TcpMulticastServerTransport:
+    """Listens on TCP and serves many clients, each identified by a random ``client_id``.
+
+    Each connection has a reader task that queues incoming frames. The queue is
+    bounded overall, in bytes and per client, so a fast client waits instead of
+    starving the others or growing memory without limit.
+
+    Args:
+        host: Address to listen on.
+        port: Port to listen on; 0 picks a free port.
+        max_frame_size: Largest frame in bytes, at most 4 GiB - 1.
+        read_timeout: Seconds to finish reading a frame once its first byte arrives.
+        write_timeout: Seconds ``send`` waits for the socket to drain.
+        idle_timeout: Seconds without traffic before the connection is dropped;
+            ``None`` disables it.
+        ssl_handshake_timeout: Seconds for the TLS handshake (TLS only).
+        ssl_shutdown_timeout: Seconds for the TLS close (TLS only).
+        ssl_context: Enables TLS when set.
+        keep_alive: OS-level TCP keepalive settings; ``None`` disables them.
+        shutdown_timeout: Seconds ``close`` waits for in-flight operations before
+            cancelling them.
+        auth: Authenticates each connection before any frame is read.
+        auth_timeout: Seconds allowed for authentication.
+        max_connections: Most clients connected at once; extras are closed on accept.
+        recv_queue_size: Most frames queued across all clients.
+        max_queue_bytes: Most payload bytes queued; must be at least ``max_frame_size``.
+        per_peer_queue_size: Most frames queued for any single client.
+    """
 
     def __init__(
         self,
@@ -616,14 +764,17 @@ class TcpMulticastServerTransport:
         self._connection_tasks: set[asyncio.Task[object]] = set()
 
     async def startup(self):
+        """Start the authenticator if it has a startup step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
 
     async def shutdown(self):
+        """Shut down the authenticator if it has a shutdown step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
 
     async def connect(self) -> None:
+        """Start listening for clients."""
         with _track_operation(self._inflight, self._closing):
             server = await asyncio.start_server(
                 self._handle_client,
@@ -649,6 +800,7 @@ class TcpMulticastServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Admit a new connection if under ``max_connections``, otherwise close it."""
         task = asyncio.current_task()
         if task is not None:
             self._connection_tasks.add(task)
@@ -678,6 +830,7 @@ class TcpMulticastServerTransport:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Authenticate one client, then queue its frames until it disconnects or fails."""
         client_id = str(uuid.uuid4())
         addr = None
         connection = TcpConnection(reader=reader, writer=writer)
@@ -760,6 +913,7 @@ class TcpMulticastServerTransport:
                     )
 
     async def close(self) -> None:
+        """Stop listening and queuing, wait for or cancel work, then close every client."""
         self._closing = True
         self._recv_queue.close()
 
@@ -784,13 +938,21 @@ class TcpMulticastServerTransport:
 
     @property
     def max_message_size(self):
+        """Largest frame in bytes."""
         return self._max_frame_size
 
     @property
     def stats(self):
+        """Queue usage plus the number of connected clients."""
         return {**self._recv_queue.stats, 'connections': len(self._clients)}
 
     async def get_principal(self, client_id=None):
+        """Return ``client_id``'s authenticated identity, re-checking credentials if supported.
+
+        Raises:
+            PermissionError: The client disconnected, or its credentials were revoked
+                or expired; in that case its connection is closed.
+        """
         if client_id is None:
             raise PermissionError('Peer disconnected')
         connection = self._clients.get(client_id)
@@ -808,10 +970,24 @@ class TcpMulticastServerTransport:
         return connection.principal
 
     async def recv(self) -> tuple[str, bytes]:
+        """Wait for the next queued frame from any client, as ``(client_id, data)``.
+
+        Raises:
+            ConnectionError: The transport is closed.
+        """
         with _track_operation(self._inflight, self._closing):
             return await self._recv_queue.get()
 
     async def send(self, client_id: str, data: bytes) -> None:
+        """Send one frame to ``client_id``.
+
+        A failed send disconnects that client and drops its queued frames.
+
+        Raises:
+            InvalidFrameSizeError: ``data`` is empty or above ``max_frame_size``.
+            ConnectionError: The client is not connected or its connection failed.
+            IdleTimeoutError: The client went idle; it is disconnected.
+        """
         with _track_operation(self._inflight, self._closing):
             connection = self._clients.get(client_id)
             if connection is None:
@@ -847,6 +1023,13 @@ class TcpMulticastServerTransport:
                 raise
 
     async def broadcast(self, data: bytes) -> None:
+        """Send one frame to every connected client at once.
+
+        Clients that fail to receive it are disconnected and otherwise ignored.
+
+        Raises:
+            InvalidFrameSizeError: ``data`` is empty or above ``max_frame_size``.
+        """
         with _track_operation(self._inflight, self._closing):
             if len(data) == 0 or len(data) > self._max_frame_size:
                 raise InvalidFrameSizeError(self._max_frame_size)
@@ -860,6 +1043,7 @@ class TcpMulticastServerTransport:
             await asyncio.gather(*(deliver(key) for key in list(self._clients)))
 
     async def __aenter__(self) -> Self:
+        """Connect and return this transport."""
         await self.connect()
         return self
 
@@ -869,4 +1053,5 @@ class TcpMulticastServerTransport:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
+        """Close the transport."""
         await self.close()

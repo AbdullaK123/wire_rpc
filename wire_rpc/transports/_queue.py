@@ -5,6 +5,18 @@ from wire_rpc._validation import positive_limit
 
 
 class PayloadQueue[T: bytes | tuple[str, bytes]]:
+    """An async queue bounded by message count, total bytes and messages per peer.
+
+    Items are ``bytes`` or ``(peer_id, bytes)``; plain bytes all count against one
+    anonymous peer. ``put`` waits for room instead of growing without bound, and
+    ``close`` wakes every waiter with ``ConnectionError``.
+
+    Args:
+        maxsize: Most messages held at once.
+        max_bytes: Most payload bytes held at once.
+        per_peer: Most messages held for any single peer.
+    """
+
     def __init__(self, maxsize=256, *, max_bytes=64 * 1024 * 1024, per_peer=16):
         for name, value in [('maxsize',maxsize),('max_bytes',max_bytes),('per_peer',per_peer)]:
             positive_limit(name, value)
@@ -19,16 +31,25 @@ class PayloadQueue[T: bytes | tuple[str, bytes]]:
 
     @property
     def stats(self):
+        """Current message count, byte total and number of peers with queued messages."""
         return {'messages':len(self._items), 'bytes':self._bytes, 'peers':len(self._counts)}
 
     def qsize(self):
+        """Number of messages currently queued."""
         return len(self._items)
 
     @staticmethod
     def _parts(item: bytes | tuple[str, bytes]) -> tuple[str | None, bytes]:
+        """Split an item into its peer id (``None`` for plain bytes) and payload."""
         return item if isinstance(item, tuple) else (None, item)
 
     async def put(self, item: T) -> None:
+        """Add an item, waiting while any limit is reached.
+
+        Raises:
+            ValueError: The payload alone is larger than ``max_bytes``.
+            ConnectionError: The queue is closed.
+        """
         peer, data = self._parts(item)
         size = len(data)
         if size > self.max_bytes:
@@ -47,6 +68,11 @@ class PayloadQueue[T: bytes | tuple[str, bytes]]:
             await self._changed.wait()
 
     async def get(self) -> T:
+        """Remove and return the oldest item, waiting if the queue is empty.
+
+        Raises:
+            ConnectionError: The queue is closed.
+        """
         while True:
             if self._closed:
                 raise ConnectionError('Receive queue closed')
@@ -63,6 +89,7 @@ class PayloadQueue[T: bytes | tuple[str, bytes]]:
             await self._changed.wait()
 
     def drop_peer(self, peer):
+        """Discard every queued message from ``peer``, e.g. after it disconnects."""
         remaining: deque[T] = deque()
         for item in self._items:
             item_peer, data = self._parts(item)
@@ -75,6 +102,7 @@ class PayloadQueue[T: bytes | tuple[str, bytes]]:
         self._changed.set()
 
     def close(self):
+        """Discard everything and make all current and future ``put``/``get`` raise."""
         self._closed = True
         self._items.clear()
         self._counts.clear()

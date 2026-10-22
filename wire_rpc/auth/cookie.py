@@ -1,3 +1,5 @@
+"""Browser login with a session cookie."""
+
 from wire_rpc.auth.credentials.protocol import CredentialValidator
 from wire_rpc.auth.sessions.memory import InMemorySessionStore
 from wire_rpc.auth.sessions.protocol import SessionStore
@@ -24,6 +26,16 @@ class CookieSessionAuth(DependencyLifecycle):
         max_age: int = 86400,
         *, require_tls: bool | None = None,
     ):
+        """Configure login and session checking.
+
+        Args:
+            credential_validator: Checks the JSON body posted to ``/login``.
+            session_store: Holds sessions; an in-memory store if omitted.
+            cookie_name: Name of the session cookie.
+            secure: Mark the cookie HTTPS-only.
+            max_age: Session lifetime in seconds.
+            require_tls: Reject plain-HTTP requests; defaults to ``secure``.
+        """
         from wire_rpc._validation import positive_limit
         positive_limit("max_age", max_age)
         self._validator = credential_validator
@@ -38,6 +50,11 @@ class CookieSessionAuth(DependencyLifecycle):
         super().__init__(self._validator, self._sessions)
 
     async def login(self, request: web.Request) -> web.Response:
+        """Check posted credentials and set a session cookie.
+
+        Responds 200 with the user id, 400 for a bad body, 401 for bad credentials,
+        403 without TLS, or 503 if validation or the session store is unavailable.
+        """
         if self._require_tls and not request.secure:
             return web.json_response({"ok": False, "error": "TLS required"}, status=403)
         try:
@@ -71,6 +88,7 @@ class CookieSessionAuth(DependencyLifecycle):
         return response
  
     def _session_id(self, request: web.Request) -> str | None:
+        """Return the session cookie's value, or ``None`` if it appears more than once."""
         matches = 0
         for header in request.headers.getall('Cookie', []):
             for part in header.split(';'):
@@ -82,6 +100,7 @@ class CookieSessionAuth(DependencyLifecycle):
         return request.cookies.get(self._cookie_name)
 
     async def verify(self, request: web.Request) -> str | None:
+        """Return the principal for the request's session cookie, or ``None``."""
         if self._require_tls and not request.secure:
             return None
         session_id = self._session_id(request)

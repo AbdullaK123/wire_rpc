@@ -1,3 +1,8 @@
+"""HTTP transports: each JSON-RPC message is the body of a ``POST /rpc``.
+
+Both ends require a text codec, since bodies are sent as ``application/json``.
+"""
+
 from wire_rpc.auth.protocol import InteractiveAuthenticator
 from wire_rpc.auth.errors import AuthUnavailableError
 from collections import deque
@@ -39,6 +44,22 @@ class HttpServerTransport:
         ssl_context: ssl.SSLContext | None = None,
         allowed_origins: set[str] | None = None,
     ):
+        """Configure the server; nothing listens until ``connect()``.
+
+        Args:
+            host: Address to listen on.
+            port: Port to listen on.
+            auth: Checks every request before its body is read. An
+                ``InteractiveAuthenticator`` also gets ``POST /login`` and ``/logout``.
+            max_pending_requests: Most requests admitted at once; more get 503.
+            request_timeout: Seconds a request may wait for its response; then 504.
+            max_body_size: Largest request or response body in bytes; larger requests get 413.
+            max_queue_bytes: Most request bytes waiting for ``recv``; more get 503.
+            shutdown_timeout: Seconds the HTTP server gets to finish open requests on close.
+            ssl_context: Enables HTTPS when set.
+            allowed_origins: Browser origins allowed to call; requests from any other
+                ``Origin`` get 403. Requests without an ``Origin`` header are allowed.
+        """
         positive_limit("max_pending_requests", max_pending_requests)
         positive_limit("max_body_size", max_body_size)
         if max_pending_requests <= 0 or max_body_size <= 0:
@@ -72,14 +93,21 @@ class HttpServerTransport:
         self._runner: web.AppRunner | None = None
 
     async def startup(self):
+        """Start the authenticator if it has a startup step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.startup()
 
     async def shutdown(self):
+        """Shut down the authenticator if it has a shutdown step."""
         if self._auth and isinstance(self._auth, StartupComponent):
             await self._auth.shutdown()
 
     async def connect(self):
+        """Start the HTTP server.
+
+        Raises:
+            RuntimeError: Already listening or closed.
+        """
         if self._runner is not None or self._closing:
             raise RuntimeError("Transport already listening or closed")
         self._app = web.Application(client_max_size=self._max_body_size)
@@ -102,6 +130,7 @@ class HttpServerTransport:
             raise
 
     async def _auth_request(self, request, handler):
+        """Run a login or logout handler with origin, concurrency and time limits."""
         origin = request.headers.get('Origin')
         if isinstance(origin,str) and origin not in self._allowed_origins:
             raise web.HTTPForbidden(text='Origin not allowed')
@@ -115,6 +144,7 @@ class HttpServerTransport:
             raise web.HTTPGatewayTimeout(text='Authentication timed out') from None
 
     async def _handle(self, request: web.Request) -> web.Response:
+        """Admit, authenticate and queue one RPC request, then wait for ``send`` to answer it."""
         if self._closing or len(self._pending) >= self._max_pending_requests:
             raise web.HTTPServiceUnavailable(text="RPC capacity unavailable")
 
@@ -163,6 +193,12 @@ class HttpServerTransport:
                     pass  # recv() already owns it; retain _active until send().
 
     async def recv(self) -> bytes:
+        """Wait for the next queued request body, skipping requests that already gave up.
+
+        Raises:
+            RuntimeError: The previous request has not been answered yet.
+            ConnectionError: The transport is closed.
+        """
         if self._receiving or self._active is not None:
             raise RuntimeError("Send the current response before receiving again")
         self._receiving = True
@@ -184,13 +220,20 @@ class HttpServerTransport:
 
     @property
     def max_message_size(self):
+        """Largest body in bytes."""
         return self._max_body_size
 
     @property
     def stats(self):
+        """Admitted requests and bytes waiting to be received."""
         return {'pending': len(self._pending), 'queued_bytes': self._queued_bytes}
 
     async def get_principal(self, client_id=None):
+        """Re-verify the current request's credentials and return its identity.
+
+        Raises:
+            PermissionError: The request has ended, or its session changed or expired.
+        """
         if self._active is None or self._active.done():
             raise PermissionError('Request no longer active')
         if self._auth:
@@ -202,12 +245,20 @@ class HttpServerTransport:
         return self._active_principal
 
     async def finish_notification(self):
+        """Answer the current request with 204 No Content, since notifications have no reply."""
         response, self._active = self._active, None
         self._active_principal = self._active_request = None
         if response is not None and not response.done():
             response.set_result(None)
 
     async def send(self, data: bytes):
+        """Answer the current request with ``data``.
+
+        Raises:
+            ValueError: ``data`` is larger than ``max_body_size``.
+            ConnectionError: The transport is closed.
+            RuntimeError: No request is waiting for an answer.
+        """
         if len(data) > self._max_body_size:
             raise ValueError('Response exceeds HTTP payload limit')
         if self._closing:
@@ -221,6 +272,7 @@ class HttpServerTransport:
             response.set_result(data)
 
     async def close(self):
+        """Fail every waiting request with 503, drop the queue and stop the server."""
         self._closing = True
         self._ready.set()
         for response in self._pending:
@@ -237,14 +289,30 @@ class HttpServerTransport:
             self._runner = None
 
     async def __aenter__(self) -> Self:
+        """Connect and return this transport."""
         await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Close the transport."""
         await self.close()
 
 
 class HttpClientTransport:
+    """Sends each message as an HTTP POST and reads the reply from its response.
+
+    ``send`` and ``recv`` must alternate. Credentials in headers or cookies are only
+    allowed over HTTPS unless ``allow_insecure_credentials`` is set.
+
+    Args:
+        url: The server's RPC endpoint, e.g. ``https://host/rpc``.
+        request_timeout: Seconds for each whole request and response.
+        max_body_size: Largest request or response body in bytes.
+        headers: Sent with every request, e.g. ``Authorization``.
+        cookie_jar: Holds session cookies, e.g. from a login.
+        ssl_context: Custom TLS settings; the system defaults are used otherwise.
+        allow_insecure_credentials: Allow credentials over plain HTTP. Testing only.
+    """
     requires_text_codec = True
 
     def __init__(self, url: str, *, request_timeout=30.0, max_body_size=1024 * 1024,
@@ -265,6 +333,11 @@ class HttpClientTransport:
         self._sending = False
 
     async def connect(self):
+        """Open the HTTP session.
+
+        Raises:
+            RuntimeError: Already connected.
+        """
         if self._session is not None:
             raise RuntimeError('Already connected')
         self._session = aiohttp.ClientSession(
@@ -275,6 +348,15 @@ class HttpClientTransport:
         )
 
     async def send(self, data: bytes):
+        """POST ``data`` and hold the response for the next ``recv``.
+
+        Redirects are not followed, so credentials cannot be sent elsewhere.
+
+        Raises:
+            ConnectionError: Not connected, or the server did not answer 200.
+            RuntimeError: The previous response has not been received.
+            ValueError: ``data`` is larger than ``max_body_size``.
+        """
         if self._session is None:
             raise ConnectionError('Not connected')
         if self._pending is not None or self._sending:
@@ -293,6 +375,12 @@ class HttpClientTransport:
             self._sending = False
 
     async def recv(self) -> bytes:
+        """Read the body of the response held by the last ``send``.
+
+        Raises:
+            RuntimeError: Nothing was sent.
+            ConnectionError: The body is larger than ``max_body_size``.
+        """
         response = self._pending
         if response is None:
             raise RuntimeError('No pending HTTP response')
@@ -310,6 +398,7 @@ class HttpClientTransport:
             self._pending = None
 
     async def close(self):
+        """Release any unread response and close the session."""
         if self._pending is not None:
             self._pending.close()
             self._pending = None
@@ -318,10 +407,12 @@ class HttpClientTransport:
             self._session = None
 
     async def __aenter__(self) -> Self:
+        """Connect and return this transport."""
         await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Close the transport."""
         await self.close()
 
 

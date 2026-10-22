@@ -9,6 +9,7 @@ from typing import Any, Callable, get_type_hints
 
 @dataclass(frozen=True, slots=True)
 class HandlerSpec:
+    """What dispatch needs to know about a handler's signature, computed once at registration."""
     params_type: Any | None
     return_type: Any | None
     has_params: bool
@@ -16,6 +17,7 @@ class HandlerSpec:
 
 
 def _parameters(func: Callable[..., Any]) -> list[inspect.Parameter]:
+    """Return the handler's parameters, rejecting keyword-only and variadic ones."""
     params = list(inspect.signature(func).parameters.values())
     supported_kinds = {
         inspect.Parameter.POSITIONAL_ONLY,
@@ -29,6 +31,15 @@ def _parameters(func: Callable[..., Any]) -> list[inspect.Parameter]:
 
 
 def inspect_handler(func: Callable[..., Any], *, multicast: bool) -> HandlerSpec:
+    """Validate a handler's signature and describe how to call it.
+
+    Unicast handlers take ``(ctx)`` or ``(params, ctx)``. Multicast handlers may also
+    take ``client_id`` as their last parameter. The type hint on ``params`` becomes
+    the type incoming params are converted to.
+
+    Raises:
+        TypeError: The signature is not one of the supported shapes.
+    """
     params = _parameters(func)
     hints = get_type_hints(func)
     count = len(params)

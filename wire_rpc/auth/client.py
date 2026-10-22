@@ -5,6 +5,14 @@ from wire_rpc.auth._util import token_text
 
 def credential_headers(*, bearer: str | None = None, api_key: str | None = None,
                        api_key_header: str = 'X-API-Key') -> Mapping[str, str]:
+    """Build HTTP headers for exactly one credential scheme.
+
+    Usage:
+        HttpClientTransport(url, headers=credential_headers(bearer=token))
+
+    Raises:
+        ValueError: Both or neither credential given, or a malformed token or header name.
+    """
     if (bearer is None) == (api_key is None):
         raise ValueError('Choose exactly one credential scheme')
     import re
@@ -17,6 +25,14 @@ def credential_headers(*, bearer: str | None = None, api_key: str | None = None,
 
 
 def validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_insecure):
+    """Refuse client settings that could leak credentials.
+
+    Credentials (headers or cookies) require ``https``/``wss`` and a verifying TLS
+    context unless ``allow_insecure`` is set. Credentials in the URL are always refused.
+
+    Raises:
+        ValueError: The settings could expose credentials, or a header is malformed.
+    """
     import ssl
     from yarl import URL
     parsed = URL(url)
