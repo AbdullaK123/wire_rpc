@@ -1,5 +1,5 @@
 import asyncio
-import pytest
+
 from wire_rpc.transports._queue import PayloadQueue
 
 

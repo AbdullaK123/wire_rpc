@@ -1,7 +1,8 @@
 import uuid
-import pytest
-from wire_rpc.auth.sessions import PostgresSessionStore, RedisSessionStore
 
+import pytest
+
+from wire_rpc.auth.sessions import PostgresSessionStore, RedisSessionStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 

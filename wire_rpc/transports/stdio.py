@@ -6,11 +6,11 @@ child's side, reading its own stdin and writing its own stdout.
 """
 
 import asyncio
-from typing import Any, Self
 import sys
+from typing import Any, Self
 
+from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.transports.errors import InvalidFrameSizeError
-from wire_rpc._validation import positive_timeout, positive_limit
 
 
 async def _read_frame(reader, writer, max_frame_size):

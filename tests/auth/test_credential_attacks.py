@@ -1,12 +1,18 @@
 import asyncio
-import threading
 import time
 from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
-from wire_rpc.auth.credentials import (ApiKeyRecord, ApiKeyValidator, PasswordAccount,
-    PasswordCredentialValidator, StaticPasswordCredentialValidator, CallbackCredentialValidator)
+
+from wire_rpc.auth.credentials import (
+    ApiKeyRecord,
+    ApiKeyValidator,
+    CallbackCredentialValidator,
+    PasswordAccount,
+    PasswordCredentialValidator,
+    StaticPasswordCredentialValidator,
+)
 from wire_rpc.auth.errors import AuthUnavailableError
 
 

@@ -1,16 +1,13 @@
 from tests.helpers import listening_port
+
 """Adversarial checks against real sockets, without sleeps or fixed ports."""
 
 import asyncio
 
 import aiohttp
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestServer
 
 from wire_rpc.transports.http import HttpServerTransport
-from wire_rpc.transports.tcp import TcpMulticastServerTransport
-from wire_rpc.transports.websocket import MulticastWsServerTransport
 
 
 async def test_http_cancelled_dispatch_does_not_cross_wire_response_between_clients():

@@ -7,7 +7,13 @@ from msgspec import UNSET
 
 from wire_rpc.codecs import Codec, CodecError
 from wire_rpc.context import RequestContext, _request_context
-from wire_rpc.errors import InternalError, InvalidRequestError, ParseError, ServerError, WireError
+from wire_rpc.errors import (
+    InternalError,
+    InvalidRequestError,
+    ParseError,
+    ServerError,
+    WireError,
+)
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse
 

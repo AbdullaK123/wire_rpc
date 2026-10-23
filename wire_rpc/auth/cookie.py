@@ -1,12 +1,13 @@
 """Browser login with a session cookie."""
 
-from wire_rpc.auth.credentials.protocol import CredentialValidator
-from wire_rpc.auth.sessions.memory import InMemorySessionStore
-from wire_rpc.auth.sessions.protocol import SessionStore
 from aiohttp import web
 
-from wire_rpc.auth._util import DependencyLifecycle, validated, token_text
+from wire_rpc.auth._util import DependencyLifecycle, token_text, validated
+from wire_rpc.auth.credentials.protocol import CredentialValidator
 from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.sessions.memory import InMemorySessionStore
+from wire_rpc.auth.sessions.protocol import SessionStore
+
 
 class CookieSessionAuth(DependencyLifecycle):
     """

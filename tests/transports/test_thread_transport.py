@@ -2,6 +2,7 @@ import asyncio
 import threading
 
 import pytest
+
 from wire_rpc import App, Client
 from wire_rpc.client import WireRpcError
 from wire_rpc.transports.thread import ThreadTransport

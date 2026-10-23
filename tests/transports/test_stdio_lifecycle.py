@@ -1,5 +1,5 @@
 import sys
-import pytest
+
 from wire_rpc.transports.stdio import StdIoTransport
 
 

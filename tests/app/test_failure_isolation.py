@@ -1,7 +1,8 @@
-from tests.helpers import UnusedTransport, response_bytes
-import asyncio
+
 import pytest
-from wire_rpc import App, MulticastApp, current_request
+
+from tests.helpers import UnusedTransport, response_bytes
+from wire_rpc import App, MulticastApp
 from wire_rpc._execution import process
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec, MsgSpecMsgPackCodec
 from wire_rpc.codecs.pydantic import PydanticCodec

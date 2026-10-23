@@ -1,7 +1,9 @@
 import asyncio
+
 import pytest
-from wire_rpc.auth.sessions import SQLiteSessionStore
+
 from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.sessions import SQLiteSessionStore
 
 
 async def test_cancelled_sqlite_request_cannot_admit_unbounded_background_transactions(tmp_path, monkeypatch):

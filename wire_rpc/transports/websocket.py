@@ -3,24 +3,27 @@
 Each JSON-RPC message is one WebSocket text message on ``/ws``. Server and
 client both require a text codec.
 """
-from wire_rpc.auth.protocol import InteractiveAuthenticator
-from wire_rpc.auth.errors import AuthUnavailableError
 import asyncio
-from pathlib import Path
 import ssl
 import uuid
-from typing import Any, Callable, cast
 from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Callable, cast
 
 import aiohttp
-from aiohttp.abc import AbstractCookieJar
 from aiohttp import web
+from aiohttp.abc import AbstractCookieJar
 
 from wire_rpc._validation import positive_limit, positive_timeout
+from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.protocol import InteractiveAuthenticator
 from wire_rpc.transports._queue import PayloadQueue
 from wire_rpc.transports.errors import TransportError
 from wire_rpc.transports.protocol import StartupComponent
-from wire_rpc.transports.tcp._connection_limiter import ConnectionLimiter, ConnectionLimitExceeded
+from wire_rpc.transports.tcp._connection_limiter import (
+    ConnectionLimiter,
+    ConnectionLimitExceeded,
+)
 
 
 def _decode_text_payload(data: bytes) -> str:

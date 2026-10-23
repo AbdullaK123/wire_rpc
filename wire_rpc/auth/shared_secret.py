@@ -5,10 +5,11 @@ The secret itself is sent over the connection and TLS is not enforced. Prefer
 ``TcpTokenAuth`` or ``HmacChallengeAuth`` from ``wire_rpc.auth``.
 """
 
-from wire_rpc.auth._util import identity
 import asyncio
 import hmac
 from typing import Any
+
+from wire_rpc.auth._util import identity
 
 
 class SharedSecretAuth:
@@ -41,14 +42,6 @@ class SharedSecretAuth:
         length = int.from_bytes(await reader.readexactly(4), 'big')
         if length != 2 or await reader.readexactly(2) != b'OK':
             raise PermissionError('Authentication rejected')
-
-    async def login(self, request: Any) -> Any:
-        """No-op; this authenticator has no login flow."""
-        return None
-
-    async def logout(self, request: Any) -> Any:
-        """No-op; this authenticator has no logout flow."""
-        return None
 
     async def verify(self, request: Any):
 

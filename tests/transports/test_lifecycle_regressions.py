@@ -1,8 +1,10 @@
 import asyncio
+
 import pytest
+
 from wire_rpc.transports.http import HttpServerTransport
-from wire_rpc.transports.websocket import WsServerTransport,MulticastWsServerTransport
-from wire_rpc.transports.tcp import TcpServerTransport,TcpMulticastServerTransport
+from wire_rpc.transports.tcp import TcpMulticastServerTransport, TcpServerTransport
+from wire_rpc.transports.websocket import MulticastWsServerTransport, WsServerTransport
 
 
 @pytest.mark.parametrize('factory',[HttpServerTransport,WsServerTransport,MulticastWsServerTransport,TcpServerTransport,TcpMulticastServerTransport])

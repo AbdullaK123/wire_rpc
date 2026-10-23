@@ -1,8 +1,15 @@
 import asyncio
 import hmac
 from unittest.mock import AsyncMock, Mock
+
 import pytest
-from wire_rpc.auth import TcpTokenAuth, TcpTokenClientAuth, HmacChallengeAuth, HmacChallengeClientAuth
+
+from wire_rpc.auth import (
+    HmacChallengeAuth,
+    HmacChallengeClientAuth,
+    TcpTokenAuth,
+    TcpTokenClientAuth,
+)
 from wire_rpc.auth.tcp import _read
 
 

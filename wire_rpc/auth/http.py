@@ -1,5 +1,6 @@
 """HTTP/upgrade authenticators. Authentication methods never fall back to each other."""
 from aiohttp import web
+
 from wire_rpc.auth._util import DependencyLifecycle, token_text, validated
 from wire_rpc.auth.protocol import TokenValidator
 

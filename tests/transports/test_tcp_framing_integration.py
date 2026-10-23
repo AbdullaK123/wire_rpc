@@ -2,14 +2,7 @@
 
 import asyncio
 
-import aiohttp
-import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestServer
-
-from wire_rpc.transports.http import HttpServerTransport
 from wire_rpc.transports.tcp import TcpMulticastServerTransport
-from wire_rpc.transports.websocket import MulticastWsServerTransport
 
 
 async def test_tcp_oversized_header_disconnects_peer_without_waiting_for_body():

@@ -13,15 +13,14 @@ Pure asyncio. Zero dependencies beyond stdlib.
 import asyncio
 import ssl
 import uuid
-from wire_rpc._validation import positive_timeout, positive_limit
-from wire_rpc.transports._queue import PayloadQueue
-from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Generator, Self
 
-from wire_rpc.auth.protocol import Authenticator, ClientAuthenticator
+from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.protocol import Authenticator, ClientAuthenticator
 from wire_rpc.logger import logger
+from wire_rpc.transports._queue import PayloadQueue
 from wire_rpc.transports.errors import IdleTimeoutError, InvalidFrameSizeError
 from wire_rpc.transports.protocol import StartupComponent
 from wire_rpc.transports.tcp._connection_limiter import (

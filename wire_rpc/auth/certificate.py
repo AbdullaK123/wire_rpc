@@ -3,6 +3,7 @@ import hashlib
 import ssl
 from collections.abc import Mapping
 from typing import Any
+
 from wire_rpc.auth._util import identity
 
 

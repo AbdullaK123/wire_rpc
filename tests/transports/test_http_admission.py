@@ -1,9 +1,9 @@
-from tests.helpers import UnusedAuthenticator
 import asyncio
 
 import pytest
 from aiohttp import web
 
+from tests.helpers import UnusedAuthenticator
 from wire_rpc.transports.http import HttpServerTransport
 
 

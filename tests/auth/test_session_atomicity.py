@@ -1,5 +1,7 @@
 import asyncio
+
 import pytest
+
 from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
 from wire_rpc.auth.sessions import _base
 

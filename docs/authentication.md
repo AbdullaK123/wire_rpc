@@ -23,13 +23,14 @@ is the TCP client-side handshake contract. Existing user authenticators providin
 all three old methods remain compatible.
 
 The new token/HMAC authenticators require TLS by default on both ends. For a local,
-isolated test only, both sides can explicitly set `require_tls=False`. The correctly
-spelled `HmacChallengeAuth` is a **new wire protocol**, with a key identifier and
-version/domain binding. It does not interoperate with legacy `HmacChallengAuth`.
-Legacy classes remain in their original modules; their optional `principal=` now
-establishes a stable identity instead of treating an ephemeral peer address as an
-account. Legacy shared-secret/HMAC handshakes still rely on transport TLS supplied
-by the caller; prefer the new defaults for new deployments.
+isolated test only, both sides can explicitly set `require_tls=False`.
+`HmacChallengeAuth` uses a key identifier and version/domain binding. The legacy
+single-secret HMAC class (`HmacChallengAuth`) has been removed; its wire protocol
+is not compatible, so both ends must move to `HmacChallengeAuth` /
+`HmacChallengeClientAuth` together. The legacy `SharedSecretAuth` remains in its
+original module; its optional `principal=` establishes a stable identity, and it
+still relies on transport TLS supplied by the caller. Prefer the new defaults for
+new deployments.
 
 Token TCP connections revalidate credentials before each request's dispatch. HMAC
 connections recheck the configured key identity/digest, and certificate connections

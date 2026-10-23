@@ -11,9 +11,11 @@ Transports may also provide, and the apps read when present:
 """
 
 from __future__ import annotations
+
 from typing import Protocol, runtime_checkable
-from urllib.parse import ParseResult
+
 from typing_extensions import Self
+
 
 @runtime_checkable
 class StartupComponent(Protocol):

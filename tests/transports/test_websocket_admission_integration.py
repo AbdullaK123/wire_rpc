@@ -1,14 +1,11 @@
 """Adversarial checks against real sockets, without sleeps or fixed ports."""
 
-import asyncio
 
 import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from wire_rpc.transports.http import HttpServerTransport
-from wire_rpc.transports.tcp import TcpMulticastServerTransport
 from wire_rpc.transports.websocket import MulticastWsServerTransport
 
 

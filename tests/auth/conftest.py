@@ -1,9 +1,16 @@
 import uuid
 from collections.abc import Iterator
+
+import pytest
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
-import pytest
-from wire_rpc.auth.sessions import InMemorySessionStore, SQLiteSessionStore, RedisSessionStore, PostgresSessionStore
+
+from wire_rpc.auth.sessions import (
+    InMemorySessionStore,
+    PostgresSessionStore,
+    RedisSessionStore,
+    SQLiteSessionStore,
+)
 
 
 @pytest.fixture(scope='session')

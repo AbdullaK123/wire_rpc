@@ -1,13 +1,16 @@
-import json
-import time
 import pytest
-from wire_rpc.auth.sessions import memory
+
 from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.sessions import memory
 
 
 async def expire(store, token):
     key = store._digest(token)
-    from wire_rpc.auth.sessions import InMemorySessionStore, SQLiteSessionStore, RedisSessionStore
+    from wire_rpc.auth.sessions import (
+        InMemorySessionStore,
+        RedisSessionStore,
+        SQLiteSessionStore,
+    )
     if isinstance(store, InMemorySessionStore):
         value, _ = store._sessions[key]
         store._sessions[key] = (value, 0)

@@ -2,6 +2,7 @@
 import hashlib
 import json
 from typing import Any
+
 from wire_rpc.auth._util import identity
 from wire_rpc.auth.errors import SessionCapacityError
 from wire_rpc.auth.sessions._base import SessionStoreBase

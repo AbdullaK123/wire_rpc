@@ -1,9 +1,10 @@
-import pytest
 import aiohttp
+import pytest
 from aiohttp import web
+
+from tests.helpers import listening_port
 from wire_rpc.transports.http import HttpClientTransport
 from wire_rpc.transports.websocket import WsClientTransport
-from tests.helpers import listening_port
 
 
 @pytest.mark.parametrize('factory,url', [(HttpClientTransport,'http://localhost/rpc'), (WsClientTransport,'ws://localhost/ws')])

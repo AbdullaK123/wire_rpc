@@ -2,6 +2,7 @@
 
 import re
 from typing import Any
+
 from wire_rpc.auth.errors import AuthUnavailableError
 from wire_rpc.transports.protocol import StartupComponent
 

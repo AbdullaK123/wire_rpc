@@ -1,6 +1,6 @@
-from tests.helpers import UnusedAuthenticator
 import asyncio
 
+from tests.helpers import UnusedAuthenticator
 from wire_rpc.transports.tcp import TcpServerTransport
 
 

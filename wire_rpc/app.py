@@ -8,18 +8,16 @@ The App class ties everything together:
 """
 
 import asyncio
-from wire_rpc._execution import ExecutionStats, process
-from wire_rpc._validation import positive_timeout, positive_limit, validate_codec
 from typing import Any, Awaitable, Callable, List, Optional
 
+from wire_rpc._execution import ExecutionStats, process
 from wire_rpc._handler import HandlerSpec, inspect_handler
 from wire_rpc._middleware import inspect_middleware
-from wire_rpc.codecs import Codec, CodecConversionError, CodecDecodeError
+from wire_rpc._validation import positive_limit, positive_timeout, validate_codec
+from wire_rpc.codecs import Codec, CodecConversionError
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 from wire_rpc.errors import (
-    InternalError,
     InvalidParamsError,
-    InvalidRequestError,
     MethodNotFoundError,
 )
 from wire_rpc.logger import logger

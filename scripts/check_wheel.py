@@ -1,13 +1,12 @@
 """Install the built wheel in an isolated environment and smoke-test exports."""
 import argparse
-import sysconfig
 import os
-from pathlib import Path
 import subprocess
-import sys
+import sysconfig
 import tempfile
 import venv
 import zipfile
+from pathlib import Path
 
 
 def main():

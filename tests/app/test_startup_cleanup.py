@@ -1,5 +1,6 @@
-from tests.helpers import UnusedTransport, response_bytes
 import pytest
+
+from tests.helpers import UnusedTransport
 from wire_rpc import App
 from wire_rpc.auth.cookie import CookieSessionAuth
 

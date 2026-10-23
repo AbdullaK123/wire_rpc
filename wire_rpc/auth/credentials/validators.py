@@ -2,15 +2,15 @@
 import asyncio
 import hashlib
 import hmac
-import time
 import math
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from wire_rpc._validation import positive_limit
-from wire_rpc.auth._util import identity, token_text, DependencyLifecycle
+from wire_rpc.auth._util import DependencyLifecycle, identity, token_text
 from wire_rpc.auth.errors import AuthUnavailableError
 from wire_rpc.auth.sessions.protocol import SessionStore
 
@@ -78,7 +78,11 @@ class PasswordCredentialValidator:
         Raises:
             AuthUnavailableError: At capacity, the lookup failed, or a stored hash is invalid.
         """
-        from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
+        from argon2.exceptions import (
+            InvalidHashError,
+            VerificationError,
+            VerifyMismatchError,
+        )
         if type(credentials) is not dict:
             return None
         username, password = credentials.get('username'), credentials.get('password')

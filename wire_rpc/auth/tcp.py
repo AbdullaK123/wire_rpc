@@ -3,9 +3,10 @@ import asyncio
 import hashlib
 import hmac
 import secrets
-from weakref import WeakKeyDictionary
 from collections.abc import Mapping
 from typing import Any
+from weakref import WeakKeyDictionary
+
 from wire_rpc._validation import positive_timeout
 from wire_rpc.auth._util import DependencyLifecycle, identity, token_text, validated
 from wire_rpc.auth.protocol import TokenValidator

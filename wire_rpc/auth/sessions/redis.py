@@ -1,8 +1,9 @@
 """Atomic bounded Redis session namespace. Caller owns the Redis client."""
 from typing import Any
+
+from wire_rpc.auth._util import identity
 from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
 from wire_rpc.auth.sessions._base import SessionStoreBase
-from wire_rpc.auth._util import identity
 
 # All keys use a single cluster hash tag. No network round trip splits a mutation.
 _SCRIPT = '''

@@ -2,7 +2,9 @@ import hashlib
 import ssl
 from types import SimpleNamespace
 from unittest.mock import Mock
+
 import pytest
+
 from wire_rpc.auth import ClientCertificateAuth
 
 

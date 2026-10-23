@@ -1,10 +1,14 @@
-import asyncio
-from types import SimpleNamespace
-from multidict import CIMultiDict
 from unittest.mock import AsyncMock, Mock
+
 import pytest
-from aiohttp import web
-from wire_rpc.auth import BearerAuth, ApiKeyAuth, CookieSessionAuth, AuthUnavailableError
+from multidict import CIMultiDict
+
+from wire_rpc.auth import (
+    ApiKeyAuth,
+    AuthUnavailableError,
+    BearerAuth,
+    CookieSessionAuth,
+)
 from wire_rpc.auth.sessions import InMemorySessionStore
 from wire_rpc.transports.http import HttpServerTransport
 from wire_rpc.transports.websocket import MulticastWsServerTransport

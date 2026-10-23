@@ -1,7 +1,7 @@
 """Interfaces for session stores."""
 
 from dataclasses import dataclass
-from typing import Protocol, Any
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)

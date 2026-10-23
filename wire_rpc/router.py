@@ -9,7 +9,7 @@ a single dict lookup regardless of nesting depth.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from wire_rpc._handler import HandlerSpec, inspect_handler

@@ -9,11 +9,11 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from wire_rpc.auth import ClientCertificateAuth
-from wire_rpc.transports.http import HttpServerTransport, HttpClientTransport
 from tests.helpers import listening_port
+from wire_rpc.auth import ClientCertificateAuth
+from wire_rpc.transports.http import HttpClientTransport, HttpServerTransport
 
 
 @pytest.fixture

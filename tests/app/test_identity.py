@@ -1,6 +1,8 @@
-from tests.helpers import UnusedTransport, response_bytes
 import asyncio
+
 import pytest
+
+from tests.helpers import UnusedTransport, response_bytes
 from wire_rpc import App, current_request
 from wire_rpc._execution import process
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec

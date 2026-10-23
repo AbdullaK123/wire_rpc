@@ -1,11 +1,9 @@
 """The shape of request middleware."""
 
-from typing import Awaitable, Callable, Optional, Protocol, Any
+from typing import Any, Awaitable, Callable, Protocol
 
-import msgspec
 from wire_rpc.request import WireRequest
 from wire_rpc.response import WireResponse
-
 
 type AppContext = Any
 type Next = Callable[[WireRequest, AppContext], Awaitable[WireResponse]]

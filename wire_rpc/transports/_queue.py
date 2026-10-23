@@ -1,6 +1,7 @@
 """Byte and peer bounded queues with explicit close wakeups."""
 import asyncio
-from collections import deque, Counter
+from collections import Counter, deque
+
 from wire_rpc._validation import positive_limit
 
 

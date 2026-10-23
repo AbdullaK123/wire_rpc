@@ -8,10 +8,9 @@ untyped builtins, then converted by the active codec at dispatch time.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from msgspec import Struct, UNSET, UnsetType, Meta
-from typing import Annotated
+from msgspec import UNSET, Meta, Struct, UnsetType
 
 
 class WireRequest[P](Struct):

@@ -3,12 +3,11 @@
 Connects to a Wire RPC server via any transport and makes typed RPC calls.
 """
 
-from typing import Any, Self, TypeVar, cast
-import uuid
 import asyncio
+import uuid
+from typing import Any, Self, TypeVar, cast
 
 from wire_rpc._validation import positive_timeout, validate_codec
-
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
 from wire_rpc.codecs.protocol import Codec
 from wire_rpc.request import RawWireRequest

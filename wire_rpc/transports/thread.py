@@ -1,10 +1,11 @@
 """JSON-RPC between two threads of the same process."""
 
+import asyncio
 import threading
+from typing import Self
+
 from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.transports.errors import InvalidFrameSizeError
-import asyncio
-from typing import Self
 
 
 class ThreadTransport:

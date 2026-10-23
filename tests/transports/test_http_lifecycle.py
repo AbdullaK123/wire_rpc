@@ -1,10 +1,10 @@
-from tests.helpers import UnusedAuthenticator
 import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
 
+from tests.helpers import UnusedAuthenticator
 from wire_rpc.transports.http import HttpServerTransport
 
 

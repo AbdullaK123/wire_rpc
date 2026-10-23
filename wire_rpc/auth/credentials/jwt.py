@@ -1,6 +1,7 @@
 """Offline JWT verification against explicitly trusted keys; no token-directed URLs."""
 from collections.abc import Mapping
 from typing import Any
+
 from wire_rpc.auth._util import identity, token_text
 from wire_rpc.auth.errors import AuthUnavailableError
 

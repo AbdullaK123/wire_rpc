@@ -1,6 +1,6 @@
 import pytest
-from wire_rpc.auth.errors import AuthUnavailableError
 
+from wire_rpc.auth.errors import AuthUnavailableError
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 

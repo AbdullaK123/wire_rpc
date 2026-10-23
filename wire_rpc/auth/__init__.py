@@ -10,13 +10,23 @@ Pick by transport:
     TCP: ``TcpTokenAuth``, ``HmacChallengeAuth``, ``ClientCertificateAuth``.
 """
 
-from .protocol import Authenticator, InteractiveAuthenticator, TokenValidator, ClientAuthenticator
-from .cookie import CookieSessionAuth
-from .http import BearerAuth, ApiKeyAuth
 from .certificate import ClientCertificateAuth
-from .tcp import TcpTokenAuth, TcpTokenClientAuth, HmacChallengeAuth, HmacChallengeClientAuth
 from .client import credential_headers
+from .cookie import CookieSessionAuth
 from .errors import AuthUnavailableError, SessionCapacityError
+from .http import ApiKeyAuth, BearerAuth
+from .protocol import (
+           Authenticator,
+           ClientAuthenticator,
+           InteractiveAuthenticator,
+           TokenValidator,
+)
+from .tcp import (
+           HmacChallengeAuth,
+           HmacChallengeClientAuth,
+           TcpTokenAuth,
+           TcpTokenClientAuth,
+)
 
 __all__ = ['Authenticator', 'InteractiveAuthenticator', 'TokenValidator', 'ClientAuthenticator',
            'CookieSessionAuth', 'BearerAuth', 'ApiKeyAuth', 'ClientCertificateAuth', 'TcpTokenAuth',

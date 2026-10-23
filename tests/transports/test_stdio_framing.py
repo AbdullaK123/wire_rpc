@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from wire_rpc.transports.errors import InvalidFrameSizeError
-from wire_rpc.transports.stdio import StdIoTransport, StdIoServerTransport
+from wire_rpc.transports.stdio import StdIoServerTransport, StdIoTransport
 
 
 @pytest.fixture(params=[StdIoTransport, StdIoServerTransport])

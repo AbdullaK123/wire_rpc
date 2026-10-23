@@ -1,6 +1,8 @@
 import time
+
 import jwt
 import pytest
+
 from wire_rpc.auth.credentials import JwtTokenValidator
 
 KEY = 'a' * 48

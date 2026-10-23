@@ -1,5 +1,6 @@
 """Client HTTP credentials; application owns login flows and token refresh."""
 from collections.abc import Mapping
+
 from wire_rpc.auth._util import token_text
 
 
@@ -34,6 +35,7 @@ def validate_client_credentials(url, headers, cookie_jar, ssl_context, allow_ins
         ValueError: The settings could expose credentials, or a header is malformed.
     """
     import ssl
+
     from yarl import URL
     parsed = URL(url)
     if parsed.user is not None:

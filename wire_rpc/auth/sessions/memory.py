@@ -3,6 +3,7 @@ import heapq
 import json
 import time
 from typing import Any
+
 from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
 from wire_rpc.auth.sessions._base import SessionStoreBase
 

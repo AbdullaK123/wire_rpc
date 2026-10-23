@@ -4,9 +4,10 @@ import json
 import sqlite3
 import time
 from typing import Any
+
+from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.auth.errors import AuthUnavailableError, SessionCapacityError
 from wire_rpc.auth.sessions._base import SessionStoreBase
-from wire_rpc._validation import positive_timeout, positive_limit
 
 
 class SQLiteSessionStore(SessionStoreBase):

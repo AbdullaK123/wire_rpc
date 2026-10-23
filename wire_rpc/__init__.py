@@ -5,12 +5,12 @@ with ``Client``, and pick a transport from ``wire_rpc.transports``. Handlers rea
 trusted request metadata through ``current_request()``.
 """
 
-from .context import RequestContext, current_request
 from .app import App
-from .multicast_app import MulticastApp
 from .client import Client
+from .context import RequestContext, current_request
+from .multicast_app import MulticastApp
 from .request import WireRequest
-from .response import WireResponse, WireErrorResponse, WireSuccessResponse
+from .response import WireErrorResponse, WireResponse, WireSuccessResponse
 from .router import Router
 
 __all__ = [

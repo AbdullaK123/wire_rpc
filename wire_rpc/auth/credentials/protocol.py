@@ -1,6 +1,7 @@
 """The interface for checking login credentials."""
 
-from typing import Protocol, Any
+from typing import Any, Protocol
+
 
 class CredentialValidator(Protocol):
  

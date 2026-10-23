@@ -3,22 +3,26 @@
 Both ends require a text codec, since bodies are sent as ``application/json``.
 """
 
-from wire_rpc.auth.protocol import InteractiveAuthenticator
-from wire_rpc.auth.errors import AuthUnavailableError
-from collections import deque
+import asyncio
 import math
 import ssl
-from wire_rpc._validation import positive_timeout, positive_limit
-from typing import Self
+from collections import deque
 from collections.abc import Mapping
-from aiohttp import web
-import aiohttp
-from aiohttp.abc import AbstractCookieJar
-import asyncio
+from typing import Self
 
-from wire_rpc.auth.protocol import Authenticator
+import aiohttp
+from aiohttp import web
+from aiohttp.abc import AbstractCookieJar
+
+from wire_rpc._validation import positive_limit, positive_timeout
+from wire_rpc.auth.errors import AuthUnavailableError
+from wire_rpc.auth.protocol import Authenticator, InteractiveAuthenticator
 from wire_rpc.transports.protocol import StartupComponent
-from wire_rpc.transports.tcp._connection_limiter import ConnectionLimiter, ConnectionLimitExceeded
+from wire_rpc.transports.tcp._connection_limiter import (
+    ConnectionLimiter,
+    ConnectionLimitExceeded,
+)
+
 
 class HttpServerTransport:
     """HTTP adapter for the sequential recv -> send transport contract.

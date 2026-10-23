@@ -6,11 +6,17 @@ validators check bearer tokens and API keys (``BearerAuth``, ``ApiKeyAuth``,
 ``AuthUnavailableError`` when they cannot decide.
 """
 
-from .protocol import CredentialValidator
-from .validators import (CallbackCredentialValidator, PasswordCredentialValidator,
-                         StaticPasswordCredentialValidator, PasswordAccount,
-                         ApiKeyRecord, ApiKeyValidator, SessionTokenValidator)
 from .jwt import JwtTokenValidator
+from .protocol import CredentialValidator
+from .validators import (
+                         ApiKeyRecord,
+                         ApiKeyValidator,
+                         CallbackCredentialValidator,
+                         PasswordAccount,
+                         PasswordCredentialValidator,
+                         SessionTokenValidator,
+                         StaticPasswordCredentialValidator,
+)
 
 __all__ = ['CredentialValidator', 'CallbackCredentialValidator', 'PasswordCredentialValidator',
            'StaticPasswordCredentialValidator', 'PasswordAccount', 'ApiKeyRecord',

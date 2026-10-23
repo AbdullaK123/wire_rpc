@@ -1,4 +1,5 @@
 import pytest
+
 from wire_rpc.auth.sessions import memory
 
 

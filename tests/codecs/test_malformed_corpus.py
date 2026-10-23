@@ -1,6 +1,8 @@
-from tests.helpers import UnusedTransport, response_bytes
 import random
+
 import pytest
+
+from tests.helpers import UnusedTransport
 from wire_rpc import App
 from wire_rpc._execution import process
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec, MsgSpecMsgPackCodec
