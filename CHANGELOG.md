@@ -50,6 +50,14 @@ underscore are private and can change in any release.
   and `connect_write_pipe` on the process's own stdin and stdout, which Windows'
   event loop doesn't support, so a stdio server child exited as soon as it
   started. It now reads and writes them on two daemon threads, on every platform.
+- `TcpServerTransport.close()` no longer hangs when a client is still connected.
+  It waited for `asyncio.Server.wait_closed()`, which on Python 3.12.1+ waits for
+  every accepted connection, before closing its own client. It now closes the
+  client first, and the final wait is bounded by `shutdown_timeout`.
+- `TcpMulticastServerTransport.close()` no longer waits the full
+  `shutdown_timeout` (30 seconds by default) when clients are connected. Idle
+  per-client readers are cancelled at once; in-flight sends still get
+  `shutdown_timeout` to finish.
 
 ## [0.2.0] - 2026-10-23
 

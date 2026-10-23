@@ -134,6 +134,17 @@ async def _drain_tasks(
     await asyncio.gather(*tracked, return_exceptions=True)
 
 
+async def _wait_server_closed(server: asyncio.Server | None, timeout: float) -> None:
+    """Wait up to ``timeout`` for a closed server's remaining connections to drop."""
+    if server is None:
+        return
+    try:
+        async with asyncio.timeout(timeout):
+            await server.wait_closed()
+    except TimeoutError:
+        logger.warning("TCP server still had open connections after shutdown")
+
+
 async def _close_writer(writer: asyncio.StreamWriter) -> None:
     """Close a stream, aborting it if a graceful close fails or takes over five seconds."""
     writer.close()
@@ -320,10 +331,11 @@ class TcpServerTransport:
         """Stop listening, wait for or cancel in-flight work, and close the client connection."""
         self._closing = True
 
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        # Stop accepting now; wait for the server only after our connections are closed,
+        # since Server.wait_closed() waits for every accepted connection (Python 3.12.1+).
+        server, self._server = self._server, None
+        if server is not None:
+            server.close()
 
         # Wake connect()/recv() calls waiting for the first connection. They
         # re-check _closing before doing any more work.
@@ -347,6 +359,7 @@ class TcpServerTransport:
             self._connection = None
 
         self._connected.clear()
+        await _wait_server_closed(server, self._shutdown_timeout)
 
     @property
     def max_message_size(self):
@@ -916,15 +929,19 @@ class TcpMulticastServerTransport:
         self._closing = True
         self._recv_queue.close()
 
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        # As in TcpServerTransport.close: stop accepting first, wait for the server last.
+        server, self._server = self._server, None
+        if server is not None:
+            server.close()
 
-        await _drain_tasks(
-            self._inflight | self._connection_tasks,
-            self._shutdown_timeout,
-        )
+        # Sends get shutdown_timeout to finish. Reader tasks only end when their client
+        # does, and the queue they feed is already closed, so they are cancelled now.
+        await _drain_tasks(self._inflight, self._shutdown_timeout)
+        readers = [task for task in self._connection_tasks
+                   if task is not asyncio.current_task() and not task.done()]
+        for task in readers:
+            task.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
 
         connections = list(self._clients.values())
         self._clients.clear()
@@ -934,6 +951,8 @@ class TcpMulticastServerTransport:
                 *(connection.close() for connection in connections),
                 return_exceptions=True,
             )
+
+        await _wait_server_closed(server, self._shutdown_timeout)
 
     @property
     def max_message_size(self):
