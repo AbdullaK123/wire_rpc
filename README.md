@@ -52,6 +52,11 @@ asyncio.run(main())
 A server error reaches the client as `WireRpcError`, which carries the JSON-RPC
 `code` and `message`. Handler exception details are never sent to the client.
 
+Batches (a JSON array of requests, as in section 6 of the JSON-RPC 2.0 spec)
+work on every transport. A batch shares one `handler_timeout`, holds at most
+`max_batch_size` calls (100 by default), and its reply always fits
+`max_response_size`.
+
 Handlers take `(ctx)` or `(params, ctx)`. `ctx` is whatever the
 `@app.on_startup` hook returned, such as a database pool. Trusted request
 metadata, including the authenticated principal, comes from `current_request()`.

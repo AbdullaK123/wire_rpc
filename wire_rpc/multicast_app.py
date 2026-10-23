@@ -43,12 +43,15 @@ class MulticastApp:
     Args:
         transport: The multi-peer connection to serve.
         codec: Encodes and decodes messages; JSON via msgspec by default.
-        handler_timeout: Seconds a request may run before it fails with -32000.
+        handler_timeout: Seconds a request, or a whole batch, may run before it
+            fails with -32000.
         startup_timeout: Seconds allowed for transport startup plus the startup hook.
         shutdown_timeout: Seconds allowed for each shutdown step and for draining
             requests in flight when ``stop()`` is called.
         max_response_size: Largest encoded response in bytes. Capped by the
             transport's ``max_message_size``; must leave at least 2048 bytes.
+        max_batch_size: Most calls in one batch; longer batches are refused
+            with -32600 before any call runs.
         max_concurrency: Most requests executing at once across all peers.
     """
 
@@ -60,6 +63,7 @@ class MulticastApp:
         handler_timeout: float = 30.0,
         startup_timeout: float = 30.0,
         shutdown_timeout: float = 10.0,
+        max_batch_size: int = 100,
         max_response_size: int = 4 * 1024 * 1024,
         max_concurrency: int = 16,
     ):
@@ -69,10 +73,12 @@ class MulticastApp:
         self._startup_timeout = startup_timeout
         positive_timeout('shutdown_timeout', shutdown_timeout)
         positive_limit('max_response_size', max_response_size)
+        positive_limit('max_batch_size', max_batch_size)
         if max_response_size < 256:
             raise ValueError('Response budget must allow at least 256 bytes for errors')
         self._handler_timeout = handler_timeout
         self._shutdown_timeout = shutdown_timeout
+        self._max_batch_size = max_batch_size
         self._max_response_size = min(max_response_size, getattr(transport, "max_message_size", max_response_size))
         if self._max_response_size < 2048:
             raise ValueError("Response budget must allow 2048 bytes for bounded error envelopes")

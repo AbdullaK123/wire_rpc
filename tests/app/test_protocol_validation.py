@@ -8,7 +8,7 @@ from wire_rpc.codecs.pydantic import PydanticCodec
 
 @pytest.mark.parametrize('codec_factory',[MsgSpecJsonCodec,MsgSpecMsgPackCodec,PydanticCodec])
 @pytest.mark.parametrize('envelope',[
-    [],[{'jsonrpc':'2.0','method':'mutate','id':1}],
+    [],
     {'method':'mutate','id':1},
     {'jsonrpc':'1.0','method':'mutate','id':1},
     {'jsonrpc':'2.0','method':'mutate','id':True},

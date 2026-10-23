@@ -18,6 +18,8 @@ async def test_seeded_garbage_and_truncations_cannot_escape_public_request_error
     corpus=[valid[:index] for index in range(len(valid))]
     corpus += [rng.randbytes(rng.randrange(128)) for _ in range(256)]
     for payload in corpus:
-        result=codec.decode(await process(app,payload,app._dispatch),dict)
-        assert result['error']['code'] in (-32700,-32600), 'hostile bytes must become normalized errors without escaping the per-request failure boundary'
+        result=codec.decode(await process(app,payload,app._dispatch),object)
+        # garbage can decode to a non-empty array, which is a batch of invalid items
+        for response in result if isinstance(result, list) else [result]:
+            assert response['error']['code'] in (-32700,-32600), 'hostile bytes must become normalized errors without escaping the per-request failure boundary'
     assert calls == [], 'malformed or truncated envelopes must never reach a mutating handler'

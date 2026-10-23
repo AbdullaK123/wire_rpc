@@ -57,7 +57,7 @@ async def test_handler_timeout_is_a_safe_request_error_and_context_is_released(m
             raise TimeoutError
         async def __aexit__(self,exc_type,exc_val,exc_tb):
             pass
-    monkeypatch.setattr(execution.asyncio,'timeout',lambda delay:Deadline())
+    monkeypatch.setattr(execution.asyncio,'timeout_at',lambda when:Deadline())
     codec=MsgSpecJsonCodec(); app=App(UnusedTransport())
     calls=[]
     @app.method('mutate')
