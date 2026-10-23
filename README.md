@@ -142,6 +142,15 @@ baseline, configured in `[tool.pyrefly]`, and runs in CI.
 Ruff enforces pyflakes rules and import order, configured in `[tool.ruff]`;
 `uv run ruff check --fix` sorts imports.
 
+### Releasing
+
+`.github/workflows/release.yml` publishes with PyPI trusted publishing, so no API
+token is stored in the repository. To release, set `version` in `pyproject.toml`,
+move the changelog's Unreleased entries under that version, commit, then publish
+a GitHub Release tagged `v<version>`. The workflow runs the full suite, builds and
+smoke-tests the wheel, and uploads to PyPI; it stops if the tag and the version
+differ. Running the workflow by hand uploads to TestPyPI instead.
+
 Tests are organized by attack surface. Concurrency tests use events and
 controlled ordering; socket tests use ephemeral ports. Test timeouts are
 deadlock guards. The CI matrix covers Python 3.12–3.14 on Linux, macOS, and Windows.

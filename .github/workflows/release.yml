@@ -1,0 +1,113 @@
+name: Release
+
+# Publishing a GitHub Release uploads that version to PyPI.
+# Running this workflow by hand ("Run workflow") uploads the current commit to TestPyPI,
+# for a practice run. Both use PyPI trusted publishing: no API token is stored here.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify before release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        run: python -m pip install uv==0.12.18
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Release tag matches the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(uv version --short)"
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "Release tag $TAG does not match version $version in pyproject.toml" >&2
+            exit 1
+          fi
+      - name: Pyrefly type checking
+        run: uv run --locked pyrefly check
+      - name: Ruff lint
+        run: uv run --locked ruff check
+      - name: Full suite, including Testcontainers PostgreSQL and Redis
+        run: uv run --locked pytest -q -W error
+
+  build:
+    name: Build distributions
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        run: python -m pip install uv==0.12.18
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Build sdist and wheel
+        run: uv build --no-sources
+      - name: Verify installed wheel outside source checkout
+        run: uv run --locked python scripts/check_wheel.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/wire-rpc
+    permissions:
+      id-token: write  # lets PyPI verify this workflow; no stored token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install uv
+        run: python -m pip install uv==0.12.18
+      - name: Upload
+        run: uv publish --trusted-publishing always --publish-url https://test.pypi.org/legacy/ dist/*
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/wire-rpc
+    permissions:
+      id-token: write  # lets PyPI verify this workflow; no stored token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install uv
+        run: python -m pip install uv==0.12.18
+      - name: Upload
+        run: uv publish --trusted-publishing always dist/*
