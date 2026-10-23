@@ -1,9 +1,6 @@
 import uuid
-from collections.abc import Iterator
 
 import pytest
-from testcontainers.community.postgres import PostgresContainer
-from testcontainers.community.redis import RedisContainer
 
 from wire_rpc.auth.sessions import (
     InMemorySessionStore,
@@ -11,21 +8,6 @@ from wire_rpc.auth.sessions import (
     RedisSessionStore,
     SQLiteSessionStore,
 )
-
-
-@pytest.fixture(scope='session')
-def redis_url() -> Iterator[str]:
-    with RedisContainer('redis:7') as container:
-        host = container.get_container_host_ip()
-        if ':' in host:
-            host = f'[{host}]'
-        yield f'redis://{host}:{container.get_exposed_port(6379)}/0'
-
-
-@pytest.fixture(scope='session')
-def postgres_dsn() -> Iterator[str]:
-    with PostgresContainer('postgres:17', driver=None) as container:
-        yield container.get_connection_url()
 
 
 @pytest.fixture(params=[

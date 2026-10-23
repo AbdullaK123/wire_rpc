@@ -9,7 +9,7 @@ from typing import Any, Self, TypeVar, cast
 
 from wire_rpc._validation import positive_timeout, validate_codec
 from wire_rpc.codecs.msgspec import MsgSpecJsonCodec
-from wire_rpc.codecs.protocol import Codec
+from wire_rpc.codecs.protocol import Codec, CodecError
 from wire_rpc.request import RawWireRequest
 from wire_rpc.transports.protocol import Transport
 
@@ -115,10 +115,14 @@ class Client:
         # own the channel and must not close somebody else's active exchange.
         """Call ``method`` and return its result converted to ``response_type``.
 
+        Notifications the server sends while the call is waiting, such as a
+        ``MulticastApp.broadcast``, are skipped rather than taken as the reply.
+
         Raises:
             WireRpcError: The server returned a JSON-RPC error.
-            ConnectionError: The client is closed, or the reply was malformed or did not
-                match the request. The client is closed afterwards.
+            ConnectionError: The client is closed, the connection dropped, or the reply
+                could not be decoded or did not match the request. The client is
+                closed afterwards.
             TimeoutError: The call did not finish within ``call_timeout``.
         """
         async with asyncio.timeout(self._call_timeout):
@@ -130,9 +134,15 @@ class Client:
                 data = self._codec.encode(request)
                 try:
                     await self._transport.send(data)
-                    response_bytes = await self._transport.recv()
-                    envelope = self._codec.decode(response_bytes, dict)
+                    while True:
+                        envelope = self._codec.decode(await self._transport.recv(), dict)
+                        if not self._is_notification(envelope):
+                            break
                     self._validate_response(envelope, request_id)
+                except (CodecError, EOFError) as exc:
+                    # EOFError covers asyncio.IncompleteReadError: the peer closed mid-frame.
+                    await self._abort()
+                    raise ConnectionError("RPC channel broken or reply undecodable") from exc
                 except BaseException:
                     await self._abort()
                     raise
@@ -140,6 +150,11 @@ class Client:
                     error = envelope["error"]
                     raise WireRpcError(error["code"], error["message"], error.get("data"))
                 return cast(T, self._codec.convert(envelope["result"], response_type))
+
+    @staticmethod
+    def _is_notification(envelope: dict) -> bool:
+        """Return True for a server-sent notification: a method and no id."""
+        return "method" in envelope and "id" not in envelope
 
     @staticmethod
     def _validate_response(envelope: dict, request_id: str) -> None:

@@ -354,10 +354,13 @@ class HttpClientTransport:
     async def send(self, data: bytes):
         """POST ``data`` and hold the response for the next ``recv``.
 
-        Redirects are not followed, so credentials cannot be sent elsewhere.
+        Redirects are not followed, so credentials cannot be sent elsewhere. A
+        ``204 No Content`` answer means the server accepted a notification; nothing
+        is held and ``recv`` must not be called for it.
 
         Raises:
-            ConnectionError: Not connected, or the server did not answer 200.
+            ConnectionError: Not connected, or the server answered something other
+                than 200 or 204.
             RuntimeError: The previous response has not been received.
             ValueError: ``data`` is larger than ``max_body_size``.
         """
@@ -371,6 +374,9 @@ class HttpClientTransport:
         try:
             response = await self._session.post(self._url, data=data,
                 headers={'Content-Type':'application/json'}, allow_redirects=False)
+            if response.status == 204:
+                response.close()
+                return
             if response.status != 200:
                 response.close()
                 raise ConnectionError('RPC HTTP request failed')
