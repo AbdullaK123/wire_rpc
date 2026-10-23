@@ -27,7 +27,7 @@ from wire_rpc.transports.tcp._connection_limiter import (
     ConnectionLimiter,
     ConnectionLimitExceeded,
 )
-from wire_rpc.transports.tcp._tcp_connection import TcpConnection
+from wire_rpc.transports.tcp._tcp_connection import TcpConnection, wait_writer_closed
 from wire_rpc.transports.tcp.keep_alive import (
     TcpKeepaliveConfig,
     configure_keepalive,
@@ -150,7 +150,7 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
     writer.close()
     try:
         async with asyncio.timeout(5.0):
-            await writer.wait_closed()
+            await wait_writer_closed(writer)
     except (ConnectionError, OSError, TimeoutError):
         transport = getattr(writer, "transport", None)
         if transport is not None:

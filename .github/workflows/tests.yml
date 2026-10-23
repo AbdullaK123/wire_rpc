@@ -15,6 +15,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ['3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
+    env:
+      # Without this, every `uv run` follows .python-version (3.12) and rebuilds the venv with it.
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +28,9 @@ jobs:
       - name: Install uv
         run: python -m pip install uv==0.12.18
       - name: Install locked dependencies
-        run: uv sync --locked --python ${{ matrix.python }}
+        run: uv sync --locked
+      - name: Check the matrix Python is the one under test
+        run: uv run --locked python -c "import sys; v = '%d.%d' % sys.version_info[:2]; assert v == '${{ matrix.python }}', v; print('Python', sys.version)"
       - name: Pyrefly type checking
         run: uv run --locked pyrefly check
       - name: Ruff lint (pyflakes and import order)

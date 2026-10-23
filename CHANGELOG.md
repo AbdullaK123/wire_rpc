@@ -54,6 +54,11 @@ underscore are private and can change in any release.
   It waited for `asyncio.Server.wait_closed()`, which on Python 3.12.1+ waits for
   every accepted connection, before closing its own client. It now closes the
   client first, and the final wait is bounded by `shutdown_timeout`.
+- Closing a TCP connection from two tasks at once no longer fails one of them
+  with a stray `CancelledError`. `StreamWriter.wait_closed()` awaits a future
+  shared by every caller, so when one closer was cancelled (for example a pending
+  `recv` during shutdown) the other got cancelled too. This made app shutdown fail
+  intermittently, mostly on macOS. Each closer now waits independently.
 - `TcpMulticastServerTransport.close()` no longer waits the full
   `shutdown_timeout` (30 seconds by default) when clients are connected. Idle
   per-client readers are cancelled at once; in-flight sends still get

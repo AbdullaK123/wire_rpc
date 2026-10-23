@@ -72,3 +72,28 @@ async def test_server_close_is_bounded_even_if_a_connection_never_drops(monkeypa
     elapsed = await _timed_close(server)
     assert elapsed < 2, f'waiting for asyncio.Server must be bounded by shutdown_timeout; took {elapsed:.1f}s'
     never.cancel()
+
+
+async def test_cancelling_one_closer_does_not_cancel_another():
+    from wire_rpc.transports.tcp._tcp_connection import TcpConnection
+    accepted: asyncio.Future = asyncio.get_running_loop().create_future()
+    server = await asyncio.start_server(lambda r, w: accepted.set_result((r, w)), '127.0.0.1', 0)
+    _, client_writer = await asyncio.open_connection('127.0.0.1', server.sockets[0].getsockname()[1])
+    try:
+        reader, writer = await accepted
+        connection = TcpConnection(reader=reader, writer=writer, close_timeout=0.5)
+        # A full send buffer to a peer that never reads keeps the graceful close pending.
+        writer.write(b'x' * 50_000_000)
+        first = asyncio.create_task(connection.close())
+        await asyncio.sleep(0.05)
+        second = asyncio.create_task(connection.close())
+        await asyncio.sleep(0.05)
+        first.cancel()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+        assert isinstance(results[0], asyncio.CancelledError), 'the task that was cancelled must see it'
+        assert results[1] is None, ('StreamWriter.wait_closed() shares one future between callers; cancelling one '
+                                    f'caller must not cancel the others (got {results[1]!r})')
+        assert writer.transport.is_closing(), 'the second closer must still finish closing the connection'
+    finally:
+        client_writer.close()
+        server.close()

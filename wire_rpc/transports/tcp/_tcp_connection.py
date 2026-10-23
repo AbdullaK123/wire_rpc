@@ -7,6 +7,19 @@ import time
 from dataclasses import dataclass, field
 
 
+async def wait_writer_closed(writer: asyncio.StreamWriter) -> None:
+    """Wait for ``writer`` to finish closing without letting cancellation leak to other waiters.
+
+    ``StreamWriter.wait_closed()`` awaits one future shared by every caller, and
+    cancelling any caller cancels that future, so every other caller would get a
+    ``CancelledError`` it never asked for. Each caller waits on its own task instead.
+    """
+    waiter = asyncio.ensure_future(writer.wait_closed())
+    # Retrieve the outcome even if every caller gave up, so it is never reported as unhandled.
+    waiter.add_done_callback(lambda done: done.cancelled() or done.exception())
+    await asyncio.shield(waiter)
+
+
 @dataclass(slots=True)
 class TcpConnection:
     """One TCP connection: its streams, authenticated identity, locks and activity clock.
@@ -36,7 +49,7 @@ class TcpConnection:
         self.writer.close()
         try:
             async with asyncio.timeout(self.close_timeout):
-                await self.writer.wait_closed()
+                await wait_writer_closed(self.writer)
         except asyncio.CancelledError:
             transport = getattr(self.writer, 'transport', None)
             if transport is not None:
@@ -49,4 +62,4 @@ class TcpConnection:
                 transport.abort()
 
 
-__all__ = ["TcpConnection"]
+__all__ = ["TcpConnection", "wait_writer_closed"]
