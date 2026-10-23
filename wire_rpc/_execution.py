@@ -1,5 +1,6 @@
 """Per-request failure boundary shared by unicast and multicast apps."""
 import asyncio
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -14,6 +15,7 @@ from wire_rpc.errors import (
     ServerError,
     WireError,
 )
+from wire_rpc.logger import access_logger
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse
 
@@ -89,12 +91,15 @@ async def _process_one(
         request = app._codec.convert(envelope, RawWireRequest)
     except (CodecError, ValueError):
         app._stats.invalid += 1
+        _access(None, '-32600', 0.0, client_id)
         return app._codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
 
     notification = request.id is UNSET
     response_id = request.response_id
     app._stats.active += 1
     token = None
+    started = time.perf_counter()
+    outcome = 'cancelled'
     try:
         async with asyncio.timeout_at(deadline):
             principal_getter = getattr(app._transport, 'get_principal', None)
@@ -102,11 +107,13 @@ async def _process_one(
             token = _request_context.set(RequestContext(response_id, request.method, principal, client_id))
             response = await dispatch(request)
         if notification:
+            outcome = 'notification'
             return None
         encoded = app._codec.encode(response)
         if len(encoded) > app._max_response_size:
             raise ValueError('Response exceeds configured size')
         app._stats.completed += 1
+        outcome = str(response.error.code) if isinstance(response, WireErrorResponse) else 'ok'
         return encoded
     except asyncio.CancelledError:
         raise
@@ -122,6 +129,7 @@ async def _process_one(
             error = ServerError(message='Access denied', code=-32001)
         else:
             error = InternalError(message='Internal server error')
+        outcome = str(error.code)
         if notification:
             return None
         # Exception strings, request bodies and validation inputs never enter
@@ -131,6 +139,13 @@ async def _process_one(
         app._stats.active -= 1
         if token is not None:
             _request_context.reset(token)
+        _access(request.method, outcome, time.perf_counter() - started, client_id)
+
+
+def _access(method: str | None, outcome: str, seconds: float, client_id: str | None) -> None:
+    """Write one access-log line; params, results and exception text are never included."""
+    access_logger.info('%s %s %.1fms peer=%s', method if method is not None else '<invalid>', outcome,
+                       seconds * 1000, client_id if client_id is not None else '-')
 
 
 
@@ -168,6 +183,7 @@ async def process(
         envelope = codec.decode(data, Any)
     except CodecError:
         stats.invalid += 1
+        access_logger.info('<unparseable> -32700 peer=%s', client_id if client_id is not None else '-')
         return codec.encode(WireErrorResponse(error=ParseError('Invalid encoded request')))
 
     deadline = asyncio.get_running_loop().time() + app._handler_timeout 

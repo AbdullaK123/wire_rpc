@@ -71,6 +71,8 @@ These are wire/queue budgets, not a total process RSS guarantee. There can also 
 
 Queue producers block at their byte/message/peer limits. Shutdown wakes blocked producers/consumers and frees queued payloads. Disconnect removes queued requests for that peer. HTTP overload rejects admission explicitly. Broadcast fanout is bounded by the connection cap and sends independently so a slow peer does not serialize every other peer's write.
 
+Logging uses the standard `logging` module under `wire_rpc` and `wire_rpc.access`. The access logger writes one INFO line per request: method (or `<invalid>` / `<unparseable>`), outcome (`ok`, `notification` or the JSON-RPC error code), duration and multicast peer id. It never logs params, results, exception text or principals. Importing the package installs no handlers. `run()` installs a stderr handler at `log_level` (INFO by default) only when neither the root logger nor `wire_rpc` already has one; logs never go to stdout.
+
 `app.stats` exposes request, active, completion, exception-failure, timeout, and invalid-envelope counters. `transport.stats` exposes queue bytes/counts and connection/pending counts where relevant; stdio reports stderr bytes discarded. These are snapshots, not a metrics exporter. Integrate them with your monitor. `completed` counts successfully encoded responses, including declared RPC errors; `failed` counts exceptions/send failures. Notification execution is counted in requests/active but does not increment encoded completions.
 
 ### Lifecycle

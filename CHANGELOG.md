@@ -24,6 +24,11 @@ underscore are private and can change in any release.
 - **Batches are now executed instead of rejected.** A JSON array request used to
   get a single -32600 error; it now gets an array of responses. Clients that relied
   on the rejection will see a different reply shape.
+- **Logging moved from loguru to Python's standard `logging` module, and the loguru
+  dependency is gone.** `logger.enable("wire_rpc")` no longer does anything;
+  configure the `wire_rpc` logger with `logging` instead. `App.run()` and
+  `MulticastApp.run()` now print INFO logs to stderr by default, including one
+  access line per request; pass `log_level=None` to turn that off.
 - **`Client.call` raises `ConnectionError` for a dropped connection or an
   undecodable reply.** It previously let `asyncio.IncompleteReadError` (TCP) or
   `CodecDecodeError` escape. Code catching those around `call` should catch
@@ -41,6 +46,8 @@ underscore are private and can change in any release.
   batch results come back in order, with failed calls returned as `WireRpcError`.
 - `Client(on_notification=...)` receives server notifications that arrive during a
   call, and `Client.receive_notification()` waits for one on a listening client.
+- An access log (`wire_rpc.access`): one line per request with the method,
+  outcome and duration, never params or results.
 - `wire_rpc.middleware.metrics_middleware`, which reports each executed call's
   method, duration, outcome, error code and principal to your exporter.
 - A user guide (`docs/guide.md`), benchmarks (`docs/benchmarks.md`,
@@ -53,6 +60,9 @@ underscore are private and can change in any release.
 - `HttpClientTransport.send` accepts `204 No Content`, so notifications can be sent
   over HTTP.
 - Type checking uses pyrefly instead of mypy and pyright.
+- Quieter logs: handler registration is DEBUG, a request for an unknown method is
+  no longer a warning (the access log records it), and closing an idle TCP
+  connection is INFO rather than ERROR.
 
 ### Fixed
 - `SQLiteSessionStore.startup()` leaked a database connection (reported as a

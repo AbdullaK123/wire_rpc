@@ -18,7 +18,7 @@ from wire_rpc.errors import (
     InvalidParamsError,
     MethodNotFoundError,
 )
-from wire_rpc.logger import logger
+from wire_rpc.logger import configure_logging, logger
 from wire_rpc.middleware import Middleware
 from wire_rpc.request import RawWireRequest
 from wire_rpc.response import WireErrorResponse, WireResponse, WireSuccessResponse
@@ -126,7 +126,7 @@ class MulticastApp:
             self._handlers[name] = func
             self._specs[name] = spec
             self._router_middleware[name] = []
-            logger.info(
+            logger.debug(
                 f"Registered handler for method '{name}' "
                 f"with parameter type '{spec.params_type}'"
             )
@@ -141,7 +141,7 @@ class MulticastApp:
             self._handlers[name] = entry.handler
             self._specs[name] = entry.spec
             self._router_middleware[name] = entry.middleware
-            logger.info(
+            logger.debug(
                 f"Registered handler for method '{name}' "
                 f"with parameter type '{entry.spec.params_type}'"
             )
@@ -154,7 +154,7 @@ class MulticastApp:
         """
         inspect_middleware(func)
         self._middleware.append(func)
-        logger.info(
+        logger.debug(
             f"Registered middleware '{getattr(func, '__name__', type(func).__name__)}'"
         )
         return func
@@ -186,7 +186,6 @@ class MulticastApp:
 
         """Convert params, run the middleware chain and handler for ``client_id``, and build the response."""
         if request.method not in self._handlers:
-            logger.warning("RPC method not found")
             return WireErrorResponse(
                 error=MethodNotFoundError("Method not found"),
                 id=request.response_id,
@@ -319,8 +318,16 @@ class MulticastApp:
                     await asyncio.gather(*self._tasks, return_exceptions=True)
                     self._tasks.clear()
 
-    def run(self):
-        """Run the app on a new event loop until the transport closes or ``stop()`` is called."""
+    def run(self, *, log_level: str | None = 'info'):
+        """Run the app on a new event loop until the transport closes or ``stop()`` is called.
+
+        Args:
+            log_level: Print wire_rpc logs to stderr at this level (debug, info,
+                warning, error or critical), unless the application has already
+                configured logging. ``None`` leaves logging alone.
+        """
+        if log_level is not None:
+            configure_logging(log_level)
         asyncio.run(self._run())
 
     async def _run(self):

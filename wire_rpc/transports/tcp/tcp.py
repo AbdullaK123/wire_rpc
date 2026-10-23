@@ -304,7 +304,7 @@ class TcpServerTransport:
             self._connection = TcpConnection(reader=reader, writer=writer, principal=addr)
             transferred = True
             self._connected.set()
-            logger.info(f"TCP client connected from {addr}")
+            logger.info(f"TCP client connected (principal={addr})")
 
         except (asyncio.TimeoutError, AuthUnavailableError):
             logger.warning("Authentication unavailable")
@@ -438,7 +438,7 @@ class TcpServerTransport:
                 await connection.close()
                 raise
             except IdleTimeoutError:
-                logger.error("Idle timeout")
+                logger.info("Closing idle TCP connection")
                 await connection.close()
                 raise
 
@@ -650,7 +650,7 @@ class TcpClientTransport:
                 await connection.close()
                 raise
             except IdleTimeoutError:
-                logger.error("Idle timeout")
+                logger.info("Closing idle TCP connection")
                 await connection.close()
                 raise
 

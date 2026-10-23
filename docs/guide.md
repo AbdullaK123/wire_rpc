@@ -306,9 +306,24 @@ an open connection at its next request. More detail:
   app.middleware(metrics_middleware(export))   # register first
   ```
 
-- Library logging goes through loguru and is off by default. Turn it on with
-  `from loguru import logger; logger.enable("wire_rpc")`. To tag your own handler
-  logs with the request, use `logger.contextualize(request_id=current_request().request_id)`.
+- Logging uses Python's standard `logging` module. `app.run()` prints logs to
+  stderr at INFO, like starting a server with Uvicorn: one access line per request
+  from `wire_rpc.access`, plus startup, connection and problem messages from
+  `wire_rpc`.
+
+  ```
+  2026-10-23 14:02:11,512 INFO     wire_rpc: TCP server listening on 0.0.0.0:9000
+  2026-10-23 14:02:13,040 INFO     wire_rpc.access: notes.create ok 2.4ms peer=-
+  2026-10-23 14:02:13,377 INFO     wire_rpc.access: notes.get -32001 0.6ms peer=-
+  ```
+
+  The outcome is `ok`, `notification`, or the JSON-RPC error code. Params,
+  results and exception text are never logged. Use `app.run(log_level="warning")`
+  for less, `"debug"` for handler registration, or `log_level=None` to leave
+  logging entirely to your application. If your application configures logging
+  first (for example with `logging.basicConfig`), `run()` leaves it alone.
+  Importing wire_rpc configures nothing; when you run the app inside your own
+  event loop, only warnings and errors appear until you configure logging.
 
 ## Testing your service
 

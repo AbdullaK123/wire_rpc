@@ -69,7 +69,7 @@ class Router:
             spec = inspect_handler(func, multicast=self._multicast)
             self._handlers[name] = func
             self._specs[name] = spec
-            logger.info(
+            logger.debug(
                 f"Router '{self.prefix}': registered method '{name}' "
                 f"with parameter type '{spec.params_type}'"
             )
@@ -80,7 +80,7 @@ class Router:
         """Register middleware scoped to this router and its children."""
         inspect_middleware(func)
         self._middleware.append(func)
-        logger.info(
+        logger.debug(
             f"Router '{self.prefix}': registered middleware "
             f"'{getattr(func, '__name__', type(func).__name__)}'"
         )
