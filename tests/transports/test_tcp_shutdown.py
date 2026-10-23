@@ -74,26 +74,38 @@ async def test_server_close_is_bounded_even_if_a_connection_never_drops(monkeypa
     never.cancel()
 
 
+class _SharedCloseWriter:
+    """Closes like asyncio.StreamWriter: every wait_closed() awaits one shared future."""
+
+    def __init__(self):
+        self.closed = asyncio.get_running_loop().create_future()
+        self.aborted = False
+        self.transport = self
+
+    def close(self):
+        pass
+
+    def abort(self):
+        self.aborted = True
+
+    async def wait_closed(self):
+        await self.closed
+
+
 async def test_cancelling_one_closer_does_not_cancel_another():
     from wire_rpc.transports.tcp._tcp_connection import TcpConnection
-    accepted: asyncio.Future = asyncio.get_running_loop().create_future()
-    server = await asyncio.start_server(lambda r, w: accepted.set_result((r, w)), '127.0.0.1', 0)
-    _, client_writer = await asyncio.open_connection('127.0.0.1', server.sockets[0].getsockname()[1])
-    try:
-        reader, writer = await accepted
-        connection = TcpConnection(reader=reader, writer=writer, close_timeout=0.5)
-        # A full send buffer to a peer that never reads keeps the graceful close pending.
-        writer.write(b'x' * 50_000_000)
-        first = asyncio.create_task(connection.close())
-        await asyncio.sleep(0.05)
-        second = asyncio.create_task(connection.close())
-        await asyncio.sleep(0.05)
-        first.cancel()
-        results = await asyncio.gather(first, second, return_exceptions=True)
-        assert isinstance(results[0], asyncio.CancelledError), 'the task that was cancelled must see it'
-        assert results[1] is None, ('StreamWriter.wait_closed() shares one future between callers; cancelling one '
-                                    f'caller must not cancel the others (got {results[1]!r})')
-        assert writer.transport.is_closing(), 'the second closer must still finish closing the connection'
-    finally:
-        client_writer.close()
-        server.close()
+    writer = _SharedCloseWriter()
+    connection = TcpConnection(reader=asyncio.StreamReader(), writer=writer, close_timeout=5)  # pyrefly: ignore[bad-argument-type]
+    first = asyncio.create_task(connection.close())
+    second = asyncio.create_task(connection.close())
+    await asyncio.sleep(0)  # both are now waiting for the close to finish
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    assert first.cancelled(), 'the task that was cancelled must see it'
+    assert not writer.closed.cancelled(), ('StreamWriter.wait_closed() shares one future between callers; cancelling '
+                                           'one caller must not cancel it for the others')
+    assert not second.done(), 'the other closer must still be waiting for the close to finish'
+    assert writer.aborted, 'a closer cancelled mid-close must still abort the connection'
+    writer.closed.set_result(None)
+    async with asyncio.timeout(5):
+        assert await second is None, 'the other closer must finish normally once the close completes'
