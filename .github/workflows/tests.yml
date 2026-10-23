@@ -28,6 +28,8 @@ jobs:
         run: uv sync --locked --python ${{ matrix.python }}
       - name: Pyrefly type checking
         run: uv run --locked pyrefly check
+      - name: Ruff lint (pyflakes and import order)
+        run: uv run --locked ruff check
       - name: Adversarial suite
         run: uv run --locked pytest -q -W error -m "not integration"
       - name: Build distribution

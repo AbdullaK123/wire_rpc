@@ -127,6 +127,7 @@ To explicitly run only tests without Docker: `uv run --locked pytest -q -W error
 ```sh
 uv sync --locked
 uv run --locked pyrefly check
+uv run --locked ruff check
 uv run --locked pytest -q -W error
 uv build --no-sources
 uv run --locked python scripts/check_wheel.py
@@ -134,10 +135,16 @@ uv run --locked python scripts/check_wheel.py
 
 Pyrefly checks the package, tests, and release scripts against a Python 3.12
 baseline, configured in `[tool.pyrefly]`, and runs in CI.
+Ruff enforces pyflakes rules and import order, configured in `[tool.ruff]`;
+`uv run ruff check --fix` sorts imports.
 
 Tests are organized by attack surface. Concurrency tests use events and
 controlled ordering; socket tests use ephemeral ports. Test timeouts are
 deadlock guards. The CI matrix covers Python 3.12–3.14 on Linux, macOS, and Windows.
+
+Releases follow semantic versioning; see the [changelog](CHANGELOG.md) for
+the policy and for breaking changes. Report vulnerabilities privately as described
+in [SECURITY.md](SECURITY.md).
 
 Read [production contracts](docs/production_contracts.md) before deploying,
 including codec compatibility, identity propagation, overload behavior,

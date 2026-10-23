@@ -35,6 +35,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "testcontainers[postgres,redis]==4.15.0",
     "pyrefly==1.4.0",
+    "ruff==0.14.0",
 ]
 
 [tool.pytest.ini_options]
@@ -43,6 +44,17 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 10
 markers = ["integration: requires Docker; starts isolated PostgreSQL/Redis containers"]
+
+[tool.ruff]
+src = ["wire_rpc", "tests", "scripts"]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Pyflakes (unused imports and variables, undefined names) and import sorting.
+select = ["F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wire_rpc", "tests"]
 
 [tool.pyrefly]
 project-includes = ["wire_rpc", "tests", "scripts"]

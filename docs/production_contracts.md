@@ -8,9 +8,9 @@ This follow-up implements the plan in `production_readiness_plan.md`. It builds 
 
 `Client` is single-flight: concurrent callers wait for the entire previous send/receive exchange. `call_timeout` defaults to 30 seconds and includes admission waiting. Cancellation while waiting does not affect the active call. Failure/cancellation after transmission closes and permanently invalidates that Client instance. Create a new Client/transport to reconnect. There are no automatic retries; a timeout does not prove that a mutation did not commit.
 
-Responses must have `jsonrpc: "2.0"`, the exact string request ID, and exactly one of `result` or a well-formed `error`. Unexpected notifications received by this request/response Client are protocol errors, not silently consumed results. Applications consuming server broadcasts need a notification-aware client implementation; this release does not provide an idle background subscription reader.
+Responses must have `jsonrpc: "2.0"`, the exact string request ID, and exactly one of `result` or a well-formed `error`. Server notifications (such as `MulticastApp.broadcast`) that arrive while a call waits are skipped, not taken as the reply; this Client does not deliver them to application code. A dropped connection or an undecodable reply raises `ConnectionError` (chained to the underlying error) and closes the Client. Applications consuming server broadcasts need a notification-aware client implementation; this release does not provide one.
 
-The server supports individual typed requests and absent-ID notifications. Notifications have no RPC response; HTTP completes with 204. Explicit `id: null` remains a request with a null response ID. Batches are explicitly rejected. IDs are strings of at most 255 characters, signed 64-bit integers, or null; method names are nonempty and at most 255 characters. The existing typed-params extension remains: scalar/null params can be used if the handler's declared type accepts them. For strict JSON-RPC interoperability, use object/array params. Missing params are validated as None against the declared handler type.
+The server supports individual typed requests and absent-ID notifications. Notifications have no RPC response; HTTP completes with 204. Explicit `id: null` remains a request with a null response ID. Batches (JSON-RPC section 6) are supported on every transport and codec: each item is validated and executed independently and in order, an invalid item gets its own error, notifications get no entry, and a batch of only notifications gets no reply. An empty batch, or one longer than `max_batch_size` (100 by default), gets a single Invalid Request error and nothing runs. The whole batch shares one `handler_timeout` deadline; calls cut off by it get -32000. The batch reply always fits the response budget: a reply that would not fit is replaced by a small -32603 error for that call, and a batch whose error replies alone could not fit is refused before anything runs. IDs are strings of at most 255 characters, signed 64-bit integers, or null; method names are nonempty and at most 255 characters. The existing typed-params extension remains: scalar/null params can be used if the handler's declared type accepts them. For strict JSON-RPC interoperability, use object/array params. Missing params are validated as None against the declared handler type.
 
 `App` remains sequential. `MulticastApp` admits up to 16 request tasks by default and refuses overlapping requests from an already-busy peer with error -32002. This keeps one peer from occupying the entire execution pool waiting for its own ordering lock. It is explicit overload rejection, not a promise to queue every pipelined call. Applications still own synchronization between different peers mutating the same resource.
 
@@ -54,6 +54,9 @@ Login/logout endpoints have a separate 16-request concurrent admission budget an
 | HTTP pending requests | 64, including authentication/body reads |
 | HTTP queued request bodies | 16 MiB; excess gets 503 |
 | Multicast executing request tasks | 16 |
+| Calls per batch | 100 (`max_batch_size`); the batch shares one handler deadline |
+| Thread message / unread messages per end | 16 MiB / 256; a full end rejects sends |
+| Thread send waiting for the other end to connect | 5 seconds (`connect_timeout`) |
 | App handler/startup deadline | 30 seconds each |
 | App shutdown drain/hooks | 10 seconds per phase |
 | App response bytes | 4 MiB, capped by transport capacity; at least 2 KiB |
@@ -78,7 +81,7 @@ Stdio continuously drains/discards stderr, drains stdout during process shutdown
 
 ### Codec compatibility
 
-| Codec | TCP / stdio | HTTP / browser WebSocket |
+| Codec | TCP / stdio / thread | HTTP / browser WebSocket |
 |---|---|---|
 | MsgSpecJsonCodec | Supported | Supported |
 | PydanticCodec | Supported | Supported |
@@ -88,7 +91,9 @@ Custom text codecs must declare `is_text = True`. Built-ins also expose `media_t
 
 ## Validation performed
 
-- **182 tests passed** with warnings treated as errors on Linux / Python 3.12.14 using locked dependencies.
+The figures below were first recorded at 182 tests. Current state (2026-10-23): **749 tests pass** with warnings treated as errors on Linux with Python 3.12, 3.13 and 3.14, including the Docker-backed PostgreSQL/Redis tests. That includes an end-to-end suite (`tests/e2e/`) covering every transport/codec pairing, every transport/authenticator pairing, every session backend, and the combinations that must be refused.
+
+- **182 tests passed** with warnings treated as errors on Linux / Python 3.12.14 using locked dependencies (original hardening pass).
 - Real TCP authenticated calls exercise both built-in authenticators with all three codecs, including failures followed by successful calls.
 - Real HTTP/WS tests exercise principal propagation, rejected input, notification completion, session revocation, origin refusal, chunked response limits, and failed-upgrade cleanup.
 - Event-controlled concurrency tests cover request ownership, cancellation, per-peer overload, byte backpressure, and broadcast isolation.
