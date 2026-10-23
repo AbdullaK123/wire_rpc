@@ -99,6 +99,8 @@ app = App(StdIoServerTransport(trusted_principal="image-plugin"))
 
 ## Platform notes
 
-The parent side (`StdIoTransport`) works on Linux, macOS and Windows.
-`StdIoServerTransport` uses asyncio's pipe support for the process's own stdin
-and stdout; verify it on Windows before relying on it there.
+Both sides work on Linux, macOS and Windows. `StdIoServerTransport` reads stdin
+and writes stdout on two daemon threads rather than through the event loop,
+because not every event loop can watch the process's own stdin and stdout
+(Windows' can't). The threads feed the event loop, so your handlers still run on
+it as usual.

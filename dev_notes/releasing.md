@@ -21,7 +21,10 @@ should do.
    `## [Unreleased]` empty above it.
 4. Commit and push.
 5. Optional dry run: Actions → Release → Run workflow. It runs every check and
-   uploads to TestPyPI.
+   uploads to TestPyPI as a pre-release such as `x.y.z.dev1201` (run 12,
+   attempt 1), because TestPyPI never accepts the same file name twice. Install
+   it with `pip install --pre --index-url https://test.pypi.org/simple/
+   --extra-index-url https://pypi.org/simple/ wire-rpc`.
 6. Create a GitHub Release with the tag `vx.y.z` and publish it.
 
 The workflow then:

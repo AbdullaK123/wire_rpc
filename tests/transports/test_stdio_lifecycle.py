@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 from wire_rpc.transports.stdio import StdIoTransport
@@ -47,3 +48,57 @@ async def test_close_escalates_to_termination_when_child_ignores_stdin_eof(monke
     await transport.close()
     assert process.terminated, 'a child ignoring graceful shutdown must receive termination instead of hanging the parent forever'
     assert transport.proc is None, 'termination must release the process even when no stderr task was started'
+
+
+# The child imports the shared e2e handlers; when NO_PIPES is set it first makes the
+# event loop refuse to watch pipes, as Windows' ProactorEventLoop does for stdin/stdout.
+_SERVER_SCRIPT = '''
+import asyncio, os, sys
+sys.path.insert(0, os.environ["WIRE_ROOT"])
+if os.environ.get("NO_PIPES"):
+    async def refuse(*args, **kwargs):
+        raise NotImplementedError("this event loop cannot watch pipes")
+    asyncio.BaseEventLoop.connect_read_pipe = refuse
+    asyncio.BaseEventLoop.connect_write_pipe = refuse
+from tests.e2e.handlers import install
+from wire_rpc import App
+from wire_rpc.transports.stdio import StdIoServerTransport
+app = App(StdIoServerTransport(read_timeout=10))
+install(app)
+app.run(log_level="warning")
+'''
+
+
+def _child(monkeypatch, *, no_pipes: bool):
+    import pathlib
+    monkeypatch.setenv('WIRE_ROOT', str(pathlib.Path(__file__).resolve().parents[2]))
+    if no_pipes:
+        monkeypatch.setenv('NO_PIPES', '1')
+    return StdIoTransport(sys.executable, '-c', _SERVER_SCRIPT, read_timeout=10)
+
+
+async def test_server_side_works_where_the_event_loop_cannot_watch_pipes(monkeypatch):
+    from wire_rpc import Client
+    async with Client(_child(monkeypatch, no_pipes=True), call_timeout=10) as client:
+        assert await client.call('add', int, {'a': 2, 'b': 3}) == 5, \
+            'the stdio server must not depend on connect_read_pipe/connect_write_pipe, which Windows lacks'
+        assert await client.call('add', int, {'a': 4, 'b': 5}) == 9, 'the channel must stay usable after the first reply'
+
+
+async def test_server_side_round_trips_frames_far_larger_than_its_read_buffer(monkeypatch):
+    from wire_rpc import Client
+    payload = {'blob': 'x' * (3 * 1024 * 1024)}
+    async with Client(_child(monkeypatch, no_pipes=False), call_timeout=10) as client:
+        assert await client.call('echo', dict, payload) == payload, \
+            'stdin reading must pause and resume around a full buffer without losing or reordering bytes'
+        assert await client.call('add', int, {'a': 1, 'b': 1}) == 2, 'a large frame must not desynchronize the next one'
+
+
+async def test_server_side_closes_stdout_when_it_stops(monkeypatch):
+    transport = _child(monkeypatch, no_pipes=False)
+    async with transport:
+        assert transport.stdin is not None and transport.proc is not None
+        transport.stdin.close()
+        async with asyncio.timeout(10):
+            await transport.proc.wait()
+        assert transport.proc.returncode == 0, 'the server child must exit cleanly once its stdin reaches EOF'

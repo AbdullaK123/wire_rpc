@@ -163,8 +163,6 @@ times faster than 100 separate calls ([Benchmarks](benchmarks.md)).
 ## Platform notes
 
 - Linux, macOS and Windows are tested in CI for Python 3.12, 3.13 and 3.14.
-- `StdIoServerTransport` relies on asyncio pipe support for the process's own
-  stdin and stdout; verify it on Windows before depending on it there.
 - Use separate Redis namespaces or PostgreSQL namespaces per application, and per
   environment if they share a backend.
 

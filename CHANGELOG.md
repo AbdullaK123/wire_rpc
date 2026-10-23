@@ -45,6 +45,12 @@ underscore are private and can change in any release.
   along with development, testing and release instructions. `docs/guide.md` now
   points to the new pages.
 
+### Fixed
+- `StdIoServerTransport` works on Windows. It used asyncio's `connect_read_pipe`
+  and `connect_write_pipe` on the process's own stdin and stdout, which Windows'
+  event loop doesn't support, so a stdio server child exited as soon as it
+  started. It now reads and writes them on two daemon threads, on every platform.
+
 ## [0.2.0] - 2026-10-23
 
 ### Breaking

@@ -6,7 +6,11 @@ child's side, reading its own stdin and writing its own stdout.
 """
 
 import asyncio
+import contextlib
+import os
+import queue
 import sys
+import threading
 from typing import Any, Self
 
 from wire_rpc._validation import positive_limit, positive_timeout
@@ -250,10 +254,132 @@ class StdIoTransport:
         """Close the transport."""
         await self.close()
 
+class _StdinPump:
+    """Feeds a file descriptor into a StreamReader from a daemon thread.
+
+    The reader treats this as its transport, so it pauses the thread when its
+    buffer is full and resumes it when a read needs more data. Uses ``os.read``
+    rather than a buffered file so no lock is held if the process exits mid-read.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, reader: asyncio.StreamReader, fd: int):
+        self._loop, self._reader, self._fd = loop, reader, fd
+        self._resume = threading.Event()
+        self._resume.set()
+        self._closed = False
+        reader.set_transport(self)  # pyrefly: ignore[bad-argument-type]
+        threading.Thread(target=self._run, name='wire-rpc-stdin', daemon=True).start()
+
+    def pause_reading(self) -> None:
+        self._resume.clear()
+
+    def resume_reading(self) -> None:
+        self._resume.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self._resume.set()
+
+    def _run(self) -> None:
+        while True:
+            self._resume.wait()
+            if self._closed:
+                return
+            try:
+                chunk = os.read(self._fd, 65536)
+            except OSError as exc:
+                self._post(self._reader.set_exception, ConnectionError(f'stdin failed: {exc}'))
+                return
+            if not chunk:
+                self._post(self._reader.feed_eof)
+                return
+            self._post(self._reader.feed_data, chunk)
+
+    def _post(self, callback, *args) -> None:
+        if self._closed:
+            return
+        try:
+            self._loop.call_soon_threadsafe(callback, *args)
+        except RuntimeError:  # the loop is closed
+            self._closed = True
+
+
+class _StdoutWriter:
+    """The part of the StreamWriter API ``_write_frame`` uses, writing from a daemon thread.
+
+    ``drain`` waits until the bytes written so far have reached the pipe, which is
+    the back-pressure a pipe transport would give. ``close`` flushes queued writes,
+    then closes ``file``.
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, file):
+        self._loop, self._file = loop, file
+        self._fd = file.fileno()
+        self._queue: queue.SimpleQueue[tuple[bytes, asyncio.Future[OSError | None]] | None] = queue.SimpleQueue()
+        self._closing = False
+        self._last: asyncio.Future[OSError | None] | None = None
+        self._finished: asyncio.Future[None] = loop.create_future()
+        threading.Thread(target=self._run, name='wire-rpc-stdout', daemon=True).start()
+
+    def write(self, data: bytes) -> None:
+        if self._closing:
+            raise ConnectionError('Stdio channel closed')
+        written: asyncio.Future[OSError | None] = self._loop.create_future()
+        self._last = written
+        self._queue.put((data, written))
+
+    async def drain(self) -> None:
+        if self._last is not None:
+            # Shielded: a timed-out drain leaves the write running, and the caller closes the channel.
+            error = await asyncio.shield(self._last)
+            if error is not None:
+                self._closing = True
+                raise error
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        if not self._closing:
+            self._closing = True
+            self._queue.put(None)
+
+    async def wait_closed(self) -> None:
+        await asyncio.shield(self._finished)
+
+    def _run(self) -> None:
+        error: OSError | None = None
+        while (item := self._queue.get()) is not None:
+            data, written = item
+            if error is None:
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(self._fd, view):]
+                except OSError as exc:
+                    error = exc
+            self._settle(written, error)
+        self._settle(self._finished, None)
+
+    def _settle(self, future: asyncio.Future, value) -> None:
+        def settle():
+            if future is self._finished:
+                with contextlib.suppress(OSError):
+                    self._file.close()
+            if not future.done():
+                future.set_result(value)
+        try:
+            self._loop.call_soon_threadsafe(settle)
+        except RuntimeError:  # the loop is closed
+            pass
+
+
 class StdIoServerTransport:
     """The child-process side of a stdio connection, using this process's stdin/stdout.
 
     Nothing else in the process may write to stdout, or the frames will be corrupted.
+    stdin and stdout are serviced by two daemon threads, since not every event loop
+    can watch them directly (Windows' cannot).
 
     Args:
         max_frame_size: Largest frame in bytes, at most 4 GiB - 1.
@@ -271,32 +397,22 @@ class StdIoServerTransport:
         positive_timeout('read_timeout',read_timeout)
         positive_timeout('write_timeout',write_timeout)
         self._read_timeout, self._write_timeout = read_timeout, write_timeout
-        self._read_transport: asyncio.ReadTransport | None = None
+        self._stdin_pump: _StdinPump | None = None
         self._max_frame_size = max_frame_size
         self._read_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
-        self.writer: asyncio.StreamWriter | None = None
+        self.writer: _StdoutWriter | None = None
         self.reader: asyncio.StreamReader | None = None
 
     async def connect(self):
 
         """Attach to this process's stdin and stdout."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        stdin_fd = sys.stdin.fileno()
+        self.writer = _StdoutWriter(loop, sys.stdout.buffer)
+        self.reader = asyncio.StreamReader()
+        self._stdin_pump = _StdinPump(loop, self.reader, stdin_fd)
 
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        self._read_transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
-        self.reader = reader
-
-        write_protocol = asyncio.StreamReaderProtocol(asyncio.StreamReader())
-        try:
-            write_transport, _ = await loop.connect_write_pipe(lambda: write_protocol, sys.stdout.buffer)
-            self.writer = asyncio.StreamWriter(write_transport, write_protocol, None, loop)
-        except BaseException:
-            self._read_transport.close()
-            self._read_transport = None
-            raise
-        
 
     async def get_principal(self, client_id=None) -> str | None:
         """Return the configured trusted principal, if any."""
@@ -316,9 +432,9 @@ class StdIoServerTransport:
                     await self.writer.wait_closed()
             except (TimeoutError, ConnectionError):
                 pass
-        if self._read_transport is not None:
-            self._read_transport.close()
-            self._read_transport = None
+        if self._stdin_pump is not None:
+            self._stdin_pump.close()
+            self._stdin_pump = None
         self.writer = self.reader = None
 
     async def recv(self) -> bytes:
