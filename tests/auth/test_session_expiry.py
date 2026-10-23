@@ -18,7 +18,9 @@ async def expire(store, token):
         heapq.heappush(store._expiry, (0, key))
     elif isinstance(store, SQLiteSessionStore):
         import sqlite3
-        with sqlite3.connect(store._path) as db:
+        from contextlib import closing
+        # A Connection's own context manager only commits; closing() releases it.
+        with closing(sqlite3.connect(store._path)) as db, db:
             db.execute('UPDATE wire_sessions SET expires=0 WHERE digest=?', (key,))
     elif isinstance(store, RedisSessionStore):
         await store._client.zadd(store._keys[1], {key: 0})

@@ -3,6 +3,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from contextlib import closing
 from typing import Any
 
 from wire_rpc._validation import positive_limit, positive_timeout
@@ -42,10 +43,12 @@ class SQLiteSessionStore(SessionStoreBase):
 
     def _initialize(self) -> None:
         """Create the table and indexes; runs on a worker thread."""
-        with sqlite3.connect(self._path, timeout=self._timeout) as db:
-            db.execute('CREATE TABLE IF NOT EXISTS wire_sessions (digest TEXT PRIMARY KEY, principal TEXT NOT NULL, value TEXT NOT NULL, expires REAL NOT NULL)')
-            db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_expiry ON wire_sessions(expires)')
-            db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_principal ON wire_sessions(principal)')
+        with closing(sqlite3.connect(self._path, timeout=self._timeout)) as db:
+            with db:
+                db.execute('CREATE TABLE IF NOT EXISTS wire_sessions (digest TEXT PRIMARY KEY, principal TEXT NOT NULL, value TEXT NOT NULL, expires REAL NOT NULL)')
+                db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_expiry ON wire_sessions(expires)')
+                db.execute('CREATE INDEX IF NOT EXISTS wire_sessions_principal ON wire_sessions(principal)')
+            
 
     async def shutdown(self) -> None:
         """Stop accepting operations."""
