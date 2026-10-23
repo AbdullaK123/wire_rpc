@@ -31,7 +31,7 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/AbdullaK123/wire_rpc"
-Documentation = "https://github.com/AbdullaK123/wire_rpc/blob/main/docs/guide.md"
+Documentation = "https://github.com/AbdullaK123/wire_rpc/blob/main/docs/README.md"
 Changelog = "https://github.com/AbdullaK123/wire_rpc/blob/main/CHANGELOG.md"
 Issues = "https://github.com/AbdullaK123/wire_rpc/issues"
 

@@ -17,6 +17,7 @@ from aiohttp.abc import AbstractCookieJar
 from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.auth.errors import AuthUnavailableError
 from wire_rpc.auth.protocol import Authenticator, InteractiveAuthenticator
+from wire_rpc.transports._origin import OriginPolicy
 from wire_rpc.transports.protocol import StartupComponent
 from wire_rpc.transports.tcp._connection_limiter import (
     ConnectionLimiter,
@@ -61,8 +62,9 @@ class HttpServerTransport:
             max_queue_bytes: Most request bytes waiting for ``recv``; more get 503.
             shutdown_timeout: Seconds the HTTP server gets to finish open requests on close.
             ssl_context: Enables HTTPS when set.
-            allowed_origins: Browser origins allowed to call; requests from any other
-                ``Origin`` get 403. Requests without an ``Origin`` header are allowed.
+            allowed_origins: Exact browser origins allowed to call; any other ``Origin``
+                gets 403. ``None`` (the default) allows only the server's own origin, and an
+                empty set allows no browsers. Requests without an ``Origin`` header are allowed.
         """
         positive_limit("max_pending_requests", max_pending_requests)
         positive_limit("max_body_size", max_body_size)
@@ -80,7 +82,7 @@ class HttpServerTransport:
         self._active_request: web.Request | None = None
         self._shutdown_timeout = shutdown_timeout
         self._ssl = ssl_context
-        self._allowed_origins = frozenset(allowed_origins or ())
+        self._origins = OriginPolicy(allowed_origins)
         self._host = host
         self._port = port
         self._auth = auth
@@ -135,9 +137,7 @@ class HttpServerTransport:
 
     async def _auth_request(self, request, handler):
         """Run a login or logout handler with origin, concurrency and time limits."""
-        origin = request.headers.get('Origin')
-        if isinstance(origin,str) and origin not in self._allowed_origins:
-            raise web.HTTPForbidden(text='Origin not allowed')
+        self._origins.check(request)
         try:
             async with self._auth_slots.slot():
                 async with asyncio.timeout(self._request_timeout):
@@ -153,9 +153,7 @@ class HttpServerTransport:
             raise web.HTTPServiceUnavailable(text="RPC capacity unavailable")
 
         # Reserve before authentication/body reads so admission cannot race.
-        origin = request.headers.get('Origin')
-        if isinstance(origin, str) and origin not in self._allowed_origins:
-            raise web.HTTPForbidden(text='Origin not allowed')
+        self._origins.check(request)
         response: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._pending.add(response)
         entry = None

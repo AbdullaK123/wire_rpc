@@ -17,6 +17,6 @@ Only the latest release receives security fixes while wire_rpc is at `0.x`.
 
 In scope: anything in the `wire_rpc` package, including authentication, session
 handling, transport limits and error sanitisation. Deployment responsibilities are
-listed in `docs/production_contracts.md` (TLS and proxy setup, rate limiting,
+listed in `docs/security.md` (TLS and proxy setup, rate limiting,
 application authorization) and are out of scope unless the library makes them
 impossible to do safely.

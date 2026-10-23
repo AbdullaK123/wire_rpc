@@ -172,26 +172,28 @@ class Server:
         return f"{'https' if self.tls else 'http'}://127.0.0.1:{self.port}"
 
 
-def _server_transport(kind, *, auth, ssl_context, max_message_size):
+def _server_transport(kind, *, auth, ssl_context, max_message_size, options):
     if kind == 'tcp':
         extra = {} if max_message_size is None else {'max_frame_size': max_message_size}
         return TcpServerTransport(host='127.0.0.1', port=0, keep_alive=None, auth=auth, ssl_context=ssl_context,
-                                  shutdown_timeout=1, read_timeout=5, **extra)
+                                  shutdown_timeout=1, read_timeout=5, **extra, **options)
     if kind == 'tcp-multi':
         extra = {} if max_message_size is None else {'max_frame_size': max_message_size}
         return TcpMulticastServerTransport(host='127.0.0.1', port=0, keep_alive=None, auth=auth,
-                                           ssl_context=ssl_context, shutdown_timeout=1, read_timeout=5, **extra)
+                                           ssl_context=ssl_context, shutdown_timeout=1, read_timeout=5, **extra,
+                                           **options)
     if kind == 'http':
         extra = {} if max_message_size is None else {'max_body_size': max_message_size}
         return HttpServerTransport('127.0.0.1', 0, auth=auth, ssl_context=ssl_context, request_timeout=5,
-                                   shutdown_timeout=1, **extra)
+                                   shutdown_timeout=1, **extra, **options)
     if kind == 'ws':
         extra = {} if max_message_size is None else {'max_msg_size': max_message_size}
-        return WsServerTransport('127.0.0.1', 0, auth=auth, ssl_context=ssl_context, close_timeout=1, **extra)
+        return WsServerTransport('127.0.0.1', 0, auth=auth, ssl_context=ssl_context, close_timeout=1, **extra,
+                                 **options)
     if kind == 'ws-multi':
         extra = {} if max_message_size is None else {'max_msg_size': max_message_size}
         return MulticastWsServerTransport('127.0.0.1', 0, auth=auth, ssl_context=ssl_context, close_timeout=1,
-                                          **extra)
+                                          **extra, **options)
     raise AssertionError(kind)
 
 
@@ -206,7 +208,7 @@ def _bound_port(kind, transport) -> int | None:
 @contextlib.asynccontextmanager
 async def serve(kind: str, codec_name: str = 'json', *, auth=None, ssl_context=None,
                 max_message_size: int | None = None, principal: str | None = None,
-                app_options: dict | None = None,
+                app_options: dict | None = None, transport_options: dict | None = None,
                 setup: Callable[[App | MulticastApp], None] | None = None) -> AsyncIterator[Server]:
     """Run a server of ``kind`` with the shared handlers until the block exits."""
     codec = CODECS[codec_name]()
@@ -233,7 +235,8 @@ async def serve(kind: str, codec_name: str = 'json', *, auth=None, ssl_context=N
                 await asyncio.wait_for(asyncio.wrap_future(running), 5)
             worker.stop()
         return
-    transport = _server_transport(kind, auth=auth, ssl_context=ssl_context, max_message_size=max_message_size)
+    transport = _server_transport(kind, auth=auth, ssl_context=ssl_context, max_message_size=max_message_size,
+                                  options=dict(transport_options or {}))
     app = (MulticastApp if kind in MULTICAST else App)(transport, codec=codec, **options)
     notes = install(app, multicast=kind in MULTICAST)
     if setup:

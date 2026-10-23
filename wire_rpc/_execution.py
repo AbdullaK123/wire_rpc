@@ -142,6 +142,13 @@ async def _process_one(
         _access(request.method, outcome, time.perf_counter() - started, client_id)
 
 
+def _refuse_batch(app: _ExecutionHost, client_id: str | None) -> bytes:
+    """Count and log a batch refused before any of it ran, and encode its single error."""
+    app._stats.invalid += 1
+    access_logger.info('<batch> -32600 peer=%s', client_id if client_id is not None else '-')
+    return app._codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
+
+
 def _access(method: str | None, outcome: str, seconds: float, client_id: str | None) -> None:
     """Write one access-log line; params, results and exception text are never included."""
     access_logger.info('%s %s %.1fms peer=%s', method if method is not None else '<invalid>', outcome,
@@ -190,13 +197,13 @@ async def process(
 
     if isinstance(envelope, list):
         if len(envelope) == 0:
-            return codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
+            return _refuse_batch(app, client_id)
         if len(envelope) > app._max_batch_size:
-            return codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
+            return _refuse_batch(app, client_id)
         fallbacks = [_fallback(codec, item) for item in envelope]
         reserve = sum(len(f) for f in fallbacks if f is not None) + len(envelope) + 8
         if reserve > app._max_response_size:
-            return codec.encode(WireErrorResponse(error=InvalidRequestError('Invalid request')))
+            return _refuse_batch(app, client_id)
         # Every unfinished item keeps its fallback's worth of space held back, so
         # the worst case (every reply replaced by its fallback) fits by construction.
         remaining = app._max_response_size - len(envelope) - 8

@@ -116,3 +116,19 @@ app.run()
     result = _python(code)
     assert result.stdout == '', 'run() must never write logs to stdout'
     assert 'wire_rpc.access: ping ok' in result.stderr, 'run() must show the access log by default, like a server runner'
+
+
+async def test_refused_batches_are_invisible(caplog):
+    caplog.set_level(logging.INFO, logger='wire_rpc')
+    async with serve('thread', app_options={'max_batch_size': 1}) as server:
+        wire = server.wire()
+        await wire.connect()
+        try:
+            for message in (b'[]', b'[{"jsonrpc":"2.0","method":"add","id":1},{"jsonrpc":"2.0","method":"add","id":2}]'):
+                await wire.send(message)
+                await wire.recv()
+        finally:
+            await wire.close()
+        assert server.app is not None and server.app.stats['invalid'] == 2, 'refused batches must be counted, or monitoring misses them'
+    lines = [r.getMessage() for r in caplog.records if r.name == 'wire_rpc.access']
+    assert [line.split()[:2] for line in lines] == [['<batch>', '-32600'], ['<batch>', '-32600']]

@@ -17,6 +17,34 @@ underscore are private and can change in any release.
 
 ## [Unreleased]
 
+### Breaking
+- **HTTP and WebSocket servers now accept browser requests from their own origin
+  by default.** With `allowed_origins` unset, a request whose `Origin` header names
+  the server's own scheme, host and port is allowed; every other origin still gets
+  `403`. Previously every browser request was rejected until `allowed_origins` was
+  set. To keep blocking all browsers, pass `allowed_origins=set()`. An explicit
+  allowlist behaves as before. Rejected origins are now logged once as a warning.
+- **`WsClientTransport` no longer limits how long it waits for each message by
+  default** (`receive_timeout` was 10 seconds, and is now `None`). Calls are
+  bounded by `Client`'s `call_timeout`, so methods slower than 10 seconds now work
+  over WebSocket, and a listening client can wait indefinitely for broadcasts. Pass
+  `receive_timeout=10` to restore the old limit.
+
+### Added
+- `App.serve()` and `MulticastApp.serve()`: a public way to run an app inside an
+  event loop you already have. `run()` is unchanged.
+- Batches refused as a whole (empty, too long, or too large to answer) are now
+  counted in `app.stats["invalid"]` and logged as `<batch> -32600` in the access log.
+- Full user documentation in `docs/`, split by topic: getting started, handlers,
+  routers and middleware, apps and lifecycle, errors, the client, every transport,
+  codecs, authentication, security, limits, observability, deployment, testing,
+  protocol support and a configuration reference.
+
+### Changed
+- Internal design notes and hardening records moved from `docs/` to `dev_notes/`,
+  along with development, testing and release instructions. `docs/guide.md` now
+  points to the new pages.
+
 ## [0.2.0] - 2026-10-23
 
 ### Breaking

@@ -1,20 +1,43 @@
 # wire_rpc
 
-Typed asyncio JSON-RPC 2.0 with JSON/Pydantic/MessagePack codecs and TCP, HTTP,
-WebSocket, stdio, and in-process thread transports.
+Typed asyncio JSON-RPC 2.0 for Python, with pluggable transports, codecs and
+authentication.
+
+- **Typed handlers.** Write plain `async` functions with type hints; params are
+  validated before your code runs and results are checked on the way out.
+- **Seven transports, one API.** TCP, WebSocket, HTTP, stdio and in-process
+  threads, with one-client and many-client servers. Swap transports without
+  touching handlers.
+- **Three codecs.** JSON (msgspec), Pydantic, and MessagePack.
+- **Full JSON-RPC 2.0.** Calls, notifications and batches, plus server push
+  (`broadcast`) on TCP and WebSocket.
+- **Authentication built in.** Bearer tokens, JWTs, API keys, cookie login,
+  TCP token and HMAC handshakes, and mutual TLS, with sessions in memory, SQLite,
+  Redis or PostgreSQL.
+- **Safe by default.** Every message, queue and wait is bounded; errors never leak
+  exception text; credentials are re-checked before every call and never sent
+  without TLS.
+- **Observable.** An access log, a metrics hook and counters.
+
+Python 3.12+. [Documentation](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/README.md) ·
+[Changelog](https://github.com/AbdullaK123/wire_rpc/blob/main/CHANGELOG.md) ·
+[PyPI](https://pypi.org/project/wire-rpc/)
+
+## Install
+
+```sh
+pip install wire-rpc
+# extras: password, jwt, redis, postgres
+pip install "wire-rpc[jwt,redis]"
+```
 
 ## Quick start
 
-The [user guide](docs/guide.md) covers handlers, routers, middleware, the client,
-transports, authentication, monitoring and testing.
-
-
-A server registers handlers on an `App`. The type hint on `params` sets how
-incoming params are validated, and the return hint sets how the result is encoded.
+A server:
 
 ```python
-# server.py
 import msgspec
+
 from wire_rpc import App
 from wire_rpc.transports.tcp import TcpServerTransport
 
@@ -36,141 +59,77 @@ if __name__ == "__main__":
     app.run()
 ```
 
-A client calls a method by name and names the type it expects back:
+A client:
 
 ```python
-# client.py
 import asyncio
+
 from wire_rpc import Client
 from wire_rpc.transports.tcp import TcpClientTransport
 
 
 async def main():
     async with Client(TcpClientTransport(host="127.0.0.1", port=9000)) as client:
-        print(await client.call("add", int, {"a": 2, "b": 3}))  # 5
+        print(await client.call("add", int, {"a": 2, "b": 3}))   # 5
 
 
 asyncio.run(main())
 ```
 
-A server error reaches the client as `WireRpcError`, which carries the JSON-RPC
-`code` and `message`. Handler exception details are never sent to the client.
+Batches and notifications:
 
-Batches (a JSON array of requests, as in section 6 of the JSON-RPC 2.0 spec)
-work on every transport. A batch shares one `handler_timeout`, holds at most
-`max_batch_size` calls (100 by default), and its reply always fits
-`max_response_size`.
+```python
+from wire_rpc.client import BatchCall, BatchNotification
 
-Handlers take `(ctx)` or `(params, ctx)`. `ctx` is whatever the
-`@app.on_startup` hook returned, such as a database pool. Trusted request
-metadata, including the authenticated principal, comes from `current_request()`.
-Group related methods with `Router("prefix")`, and wrap them with
-`@app.middleware` or `@router.middleware`.
+results = await client.batch([
+    BatchCall("add", int, {"a": 1, "b": 2}),
+    BatchNotification("audit.log", {"event": "added"}),
+])
+```
 
 ## Transports
 
-`App` serves one peer, and requests run one at a time. `MulticastApp` serves many
-peers, each identified by a `client_id`, and can broadcast notifications to all of them.
+| Transport | Server | Client | Best for |
+|---|---|---|---|
+| TCP | `TcpServerTransport`, `TcpMulticastServerTransport` | `TcpClientTransport` | Service-to-service; fastest |
+| WebSocket | `WsServerTransport`, `MulticastWsServerTransport` | `WsClientTransport` | Browsers, server push |
+| HTTP | `HttpServerTransport` | `HttpClientTransport` | Proxies, load balancers, `curl` |
+| stdio | `StdIoServerTransport` | `StdIoTransport` | Plugins and worker processes |
+| Threads | `ThreadTransport.pair()` | the other end | In-process, and tests |
 
-| Transport | Use with | Notes |
-|---|---|---|
-| `TcpServerTransport` / `TcpClientTransport` | `App` / `Client` | Length-prefixed frames, optional TLS. The server serves one connection; the app stops when it closes. |
-| `TcpMulticastServerTransport` | `MulticastApp` | Many TCP clients, bounded per-client queues. |
-| `HttpServerTransport` / `HttpClientTransport` | `App` / `Client` | One `POST /rpc` per call. Text codecs only. |
-| `WsServerTransport` / `WsClientTransport` | `App` / `Client` | One WebSocket connection on `/ws`. Text codecs only. |
-| `MulticastWsServerTransport` | `MulticastApp` | Many WebSocket clients, for browsers. |
-| `StdIoTransport` / `StdIoServerTransport` | `Client` / `App` | Talk to a child process over its stdin/stdout. |
-| `ThreadTransport` | `App` + `Client` | Two threads in one process, each with its own event loop. |
+## Documentation
 
-Every transport enforces a maximum message size. Authentication is set per transport with
-`auth=`; see the [authentication suite](docs/authentication.md).
+- [Getting started](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/getting-started.md)
+- [Handlers](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/handlers.md) ·
+  [Routers and middleware](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/routers-and-middleware.md) ·
+  [Apps and lifecycle](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/apps-and-lifecycle.md) ·
+  [Errors](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/errors.md)
+- [The client](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/client.md)
+- [Transports](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/transports/README.md) ·
+  [Codecs](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/codecs.md)
+- [Authentication](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/authentication/README.md) ·
+  [Security model](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/security.md)
+- [Limits](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/limits.md) ·
+  [Observability](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/observability.md) ·
+  [Deployment](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/deployment.md) ·
+  [Benchmarks](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/benchmarks.md)
+- [Protocol support](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/protocol.md) ·
+  [Configuration reference](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/reference/configuration.md) ·
+  [Testing your service](https://github.com/AbdullaK123/wire_rpc/blob/main/docs/testing.md)
 
-### Between threads
+## Versioning and security
 
-`ThreadTransport.pair()` returns two connected ends. Give one to each thread;
-each end binds to the event loop of the thread that connects it. Sending copies
-the message, and an end that is full (`max_queue_size` unread messages) rejects
-new sends instead of growing without limit. Either thread can start first: a
-send waits up to `connect_timeout` (5 seconds by default) for the other end to
-connect.
+wire_rpc follows semantic versioning; while it's `0.x`, minor releases may break
+compatibility, and every breaking change is listed in the
+[changelog](https://github.com/AbdullaK123/wire_rpc/blob/main/CHANGELOG.md) with
+what to do. Report vulnerabilities privately as described in
+[SECURITY.md](https://github.com/AbdullaK123/wire_rpc/blob/main/SECURITY.md).
 
-```python
-import asyncio
-import threading
+## Contributing
 
-from wire_rpc import App, Client
-from wire_rpc.transports import ThreadTransport
+Development setup, the test suite, design notes and the release process are in
+[dev_notes/](https://github.com/AbdullaK123/wire_rpc/blob/main/dev_notes/README.md).
 
-client_end, server_end = ThreadTransport.pair()
-app = App(server_end)
+## License
 
-
-@app.method("add")
-async def add(params: dict, ctx) -> int:
-    return params["a"] + params["b"]
-
-
-threading.Thread(target=app.run, daemon=True).start()
-
-
-async def main():
-    async with Client(client_end) as client:
-        print(await client.call("add", int, {"a": 2, "b": 3}))  # 5
-
-
-asyncio.run(main())
-```
-
-## Development and release checks
-
-Requires Python 3.12 or newer, uv, and a running Docker daemon for the full suite.
-Testcontainers starts isolated PostgreSQL 17 and Redis 7 services automatically.
-Missing Docker or a failed container startup fails the tests; no backend is silently skipped.
-To explicitly run only tests without Docker: `uv run --locked pytest -q -W error -m "not integration"`.
-
-```sh
-uv sync --locked
-uv run --locked pyrefly check
-uv run --locked ruff check
-uv run --locked pytest -q -W error
-uv build --no-sources
-uv run --locked python scripts/check_wheel.py
-```
-
-Pyrefly checks the package, tests, and release scripts against a Python 3.12
-baseline, configured in `[tool.pyrefly]`, and runs in CI.
-Ruff enforces pyflakes rules and import order, configured in `[tool.ruff]`;
-`uv run ruff check --fix` sorts imports.
-
-### Releasing
-
-`.github/workflows/release.yml` publishes with PyPI trusted publishing, so no API
-token is stored in the repository. To release, set `version` in `pyproject.toml`,
-move the changelog's Unreleased entries under that version, commit, then publish
-a GitHub Release tagged `v<version>`. The workflow runs the full suite, builds and
-smoke-tests the wheel, and uploads to PyPI; it stops if the tag and the version
-differ. Running the workflow by hand uploads to TestPyPI instead.
-
-Tests are organized by attack surface. Concurrency tests use events and
-controlled ordering; socket tests use ephemeral ports. Test timeouts are
-deadlock guards. The CI matrix covers Python 3.12–3.14 on Linux, macOS, and Windows.
-
-Releases follow semantic versioning; see the [changelog](CHANGELOG.md) for
-the policy and for breaking changes. Report vulnerabilities privately as described
-in [SECURITY.md](SECURITY.md).
-
-Read [production contracts](docs/production_contracts.md) before deploying,
-including codec compatibility, identity propagation, overload behavior,
-cancellation semantics, resource budgets, and platform limitations.
-
-[Benchmarks](docs/benchmarks.md) give rough per-transport latency and throughput,
-and how to reproduce them.
-
-The [execution plan](docs/production_readiness_plan.md) records the follow-up
-hardening work. The [initial review](docs/transport_codec_hardening_review.md)
-records the first transport/codec regression pass.
-
-The [authentication suite](docs/authentication.md) documents authenticators,
-credential validators, session backends, client credentials, TLS policy, and
-adversarial backend tests. Optional extras are `password`, `jwt`, `redis`, and
-`postgres`; core imports do not require them.
+MIT

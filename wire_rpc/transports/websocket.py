@@ -17,6 +17,7 @@ from aiohttp.abc import AbstractCookieJar
 from wire_rpc._validation import positive_limit, positive_timeout
 from wire_rpc.auth.errors import AuthUnavailableError
 from wire_rpc.auth.protocol import InteractiveAuthenticator
+from wire_rpc.transports._origin import OriginPolicy
 from wire_rpc.transports._queue import PayloadQueue
 from wire_rpc.transports.errors import TransportError
 from wire_rpc.transports.protocol import StartupComponent
@@ -61,7 +62,7 @@ class _WsServer:
         self._max_msg_size = max_msg_size
         self._write_timeout, self._auth_timeout, self._close_timeout = write_timeout, auth_timeout, close_timeout
         self._static_dir, self._auth, self._ssl = static_dir, auth, ssl_context
-        self._allowed_origins = frozenset(allowed_origins or ())
+        self._origins = OriginPolicy(allowed_origins)
         self._connection_limiter = ConnectionLimiter(max_connections)
         self._auth_slots = ConnectionLimiter(16)
         self._recv_queue: PayloadQueue[Any] = PayloadQueue(recv_queue_size, max_bytes=max_queue_bytes, per_peer=per_peer_queue_size)
@@ -95,10 +96,8 @@ class _WsServer:
             await self._auth.shutdown()
 
     def _check_origin(self, request):
-        """Reject a browser request from an origin not in ``allowed_origins`` with 403."""
-        origin = request.headers.get('Origin')
-        if isinstance(origin, str) and origin not in self._allowed_origins:
-            raise web.HTTPForbidden(text='Origin not allowed')
+        """Reject a browser request from an origin that isn't allowed, with 403."""
+        self._origins.check(request)
 
     async def _auth_request(self, request, handler):
         """Run a login or logout handler with origin, concurrency and time limits."""
@@ -316,8 +315,9 @@ class WsServerTransport(_WsServer):
         max_queue_bytes: Most received bytes waiting; must be at least ``max_msg_size``.
         auth_timeout: Seconds for authentication and the WebSocket handshake.
         close_timeout: Seconds allowed for closing a connection.
-        allowed_origins: Browser origins allowed to connect; any other ``Origin``
-            gets 403. Requests without an ``Origin`` header are allowed.
+        allowed_origins: Exact browser origins allowed to connect; any other ``Origin``
+            gets 403. ``None`` (the default) allows only the server's own origin, and an
+            empty set allows no browsers. Requests without an ``Origin`` header are allowed.
         ssl_context: Enables WSS when set.
     """
 
@@ -350,8 +350,9 @@ class MulticastWsServerTransport(_WsServer):
         per_peer_queue_size: Most received messages waiting from any one client.
         auth_timeout: Seconds for authentication and the WebSocket handshake.
         close_timeout: Seconds allowed for closing a connection.
-        allowed_origins: Browser origins allowed to connect; any other ``Origin``
-            gets 403. Requests without an ``Origin`` header are allowed.
+        allowed_origins: Exact browser origins allowed to connect; any other ``Origin``
+            gets 403. ``None`` (the default) allows only the server's own origin, and an
+            empty set allows no browsers. Requests without an ``Origin`` header are allowed.
         ssl_context: Enables WSS when set.
     """
     _multicast = True
@@ -390,7 +391,9 @@ class WsClientTransport:
 
     Args:
         url: The server's WebSocket endpoint.
-        receive_timeout: Seconds ``recv`` waits for a message.
+        receive_timeout: Seconds ``recv`` waits for a message, or ``None`` (the default)
+            for no limit. ``Client``'s ``call_timeout`` already bounds every call, so this
+            only needs setting when using the transport without ``Client``.
         close_timeout: Seconds allowed for closing.
         connect_timeout: Seconds for the connection and handshake.
         write_timeout: Seconds a send may take.
@@ -402,11 +405,13 @@ class WsClientTransport:
     """
     requires_text_codec = True
 
-    def __init__(self, url='ws://localhost:8000/ws', receive_timeout=10.0, close_timeout=5.0,
+    def __init__(self, url='ws://localhost:8000/ws', receive_timeout: float | None = None, close_timeout=5.0,
                  *, connect_timeout=10.0, write_timeout=10.0, max_msg_size=1024*1024,
                  headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,
                  ssl_context: ssl.SSLContext | None = None, allow_insecure_credentials: bool = False):
-        for name,value in [('receive_timeout',receive_timeout),('close_timeout',close_timeout),
+        if receive_timeout is not None:
+            positive_timeout('receive_timeout', receive_timeout)
+        for name,value in [('close_timeout',close_timeout),
                            ('connect_timeout',connect_timeout),('write_timeout',write_timeout)]:
             positive_timeout(name,value)
         positive_limit('max_msg_size',max_msg_size)
@@ -465,7 +470,7 @@ class WsClientTransport:
 
         Raises:
             ConnectionError: Not connected, or the connection closed.
-            TimeoutError: Nothing arrived within ``receive_timeout``.
+            TimeoutError: Nothing arrived within ``receive_timeout``, if one is set.
         """
         if self._ws is None:
             raise ConnectionError('Not connected')

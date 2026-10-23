@@ -47,3 +47,35 @@ async def test_failed_application_hook_still_releases_started_transport_dependen
         await app._run()
     assert events == ['start','stop'], 'failed application startup must not leak resources opened by the transport authentication layer'
     assert not app._running, 'a failed startup must release the application lifecycle state'
+
+
+async def test_public_serve_cannot_run_and_stop():
+    import asyncio
+
+    from wire_rpc import App, Client
+    from wire_rpc.transports import ThreadTransport
+    client_end, server_end = ThreadTransport.pair()
+    app = App(server_end)
+
+    @app.method('ping')
+    async def ping(ctx) -> str:
+        return 'pong'
+
+    import threading
+    loop_ready = threading.Event()
+    result: dict = {}
+
+    def server_thread():
+        async def main():
+            result['loop'] = asyncio.get_running_loop()
+            loop_ready.set()
+            await app.serve()
+        asyncio.run(main())
+
+    thread = threading.Thread(target=server_thread, daemon=True)
+    thread.start()
+    loop_ready.wait(5)
+    async with Client(client_end) as client:
+        assert await client.call('ping', str) == 'pong', 'serve() must run the app on the caller\'s own event loop'
+    thread.join(5)
+    assert not thread.is_alive(), 'serve() must return once the transport closes'

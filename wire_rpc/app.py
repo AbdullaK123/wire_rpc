@@ -293,6 +293,17 @@ class App:
             configure_logging(log_level)
         asyncio.run(self._run())
 
+    async def serve(self) -> None:
+        """Serve on the current event loop until the transport closes or ``stop()`` is called.
+
+        Use this instead of ``run()`` when your program already runs an event loop,
+        for example to serve alongside other tasks. It does not configure logging.
+
+        Raises:
+            RuntimeError: The app is already running or has already run once.
+        """
+        await self._run()
+
     async def _run(self):
         """Start up, serve until stopped, then shut down in reverse order.
 
