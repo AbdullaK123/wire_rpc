@@ -1,15 +1,39 @@
 [project]
 name = "wire-rpc"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Typed asyncio JSON-RPC 2.0 with pluggable transports, codecs and authentication"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Abdalla Kayyani" }]
+keywords = ["json-rpc", "rpc", "asyncio", "websocket", "msgspec"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 dependencies = [
     "aiohttp>=3.14.3",
     "msgspec>=0.21.1",
     "pydantic>=2.13.4",
     "typing-extensions>=4.16.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/AbdullaK123/wire_rpc"
+Documentation = "https://github.com/AbdullaK123/wire_rpc/blob/main/docs/guide.md"
+Changelog = "https://github.com/AbdullaK123/wire_rpc/blob/main/CHANGELOG.md"
+Issues = "https://github.com/AbdullaK123/wire_rpc/issues"
 
 [project.optional-dependencies]
 password = ["argon2-cffi>=25.1.0"]

@@ -17,6 +17,8 @@ underscore are private and can change in any release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
 ### Breaking
 - **Removed the legacy single-secret HMAC authenticator** (`wire_rpc.auth.hmac_challenge.HmacChallengAuth`).
   Use `HmacChallengeAuth` with `HmacChallengeClientAuth` from `wire_rpc.auth`. Its
