@@ -37,11 +37,19 @@ underscore are private and can change in any release.
   per-call response budget.
 - An end-to-end test suite (`tests/e2e/`) covering every transport/codec,
   transport/authenticator and session-backend combination.
+- `Client.notify()` and `Client.batch()` (with `BatchCall` and `BatchNotification`);
+  batch results come back in order, with failed calls returned as `WireRpcError`.
+- `Client(on_notification=...)` receives server notifications that arrive during a
+  call, and `Client.receive_notification()` waits for one on a listening client.
+- `wire_rpc.middleware.metrics_middleware`, which reports each executed call's
+  method, duration, outcome, error code and principal to your exporter.
+- A user guide (`docs/guide.md`), benchmarks (`docs/benchmarks.md`,
+  `scripts/bench.py`), `SECURITY.md`, and ruff in CI.
 - Docstrings across the library, and a quick start in the README.
 
 ### Changed
-- `Client.call` skips server notifications (such as broadcasts) that arrive while a
-  call is waiting, instead of failing the call.
+- `Client.call` passes server notifications (such as broadcasts) that arrive while
+  a call is waiting to `on_notification`, or drops them, instead of failing the call.
 - `HttpClientTransport.send` accepts `204 No Content`, so notifications can be sent
   over HTTP.
 - Type checking uses pyrefly instead of mypy and pyright.

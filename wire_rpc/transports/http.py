@@ -317,7 +317,9 @@ class HttpClientTransport:
         ssl_context: Custom TLS settings; the system defaults are used otherwise.
         allow_insecure_credentials: Allow credentials over plain HTTP. Testing only.
     """
+
     requires_text_codec = True
+    supports_server_push = False
 
     def __init__(self, url: str, *, request_timeout=30.0, max_body_size=1024 * 1024,
                  headers: Mapping[str, str] | None = None, cookie_jar: AbstractCookieJar | None = None,

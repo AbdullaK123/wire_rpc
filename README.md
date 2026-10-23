@@ -5,6 +5,10 @@ WebSocket, stdio, and in-process thread transports.
 
 ## Quick start
 
+The [user guide](docs/guide.md) covers handlers, routers, middleware, the client,
+transports, authentication, monitoring and testing.
+
+
 A server registers handlers on an `App`. The type hint on `params` sets how
 incoming params are validated, and the return hint sets how the result is encoded.
 
@@ -149,6 +153,9 @@ in [SECURITY.md](SECURITY.md).
 Read [production contracts](docs/production_contracts.md) before deploying,
 including codec compatibility, identity propagation, overload behavior,
 cancellation semantics, resource budgets, and platform limitations.
+
+[Benchmarks](docs/benchmarks.md) give rough per-transport latency and throughput,
+and how to reproduce them.
 
 The [execution plan](docs/production_readiness_plan.md) records the follow-up
 hardening work. The [initial review](docs/transport_codec_hardening_review.md)
