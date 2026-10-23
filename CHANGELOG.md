@@ -17,6 +17,8 @@ underscore are private and can change in any release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Breaking
 - **HTTP and WebSocket servers now accept browser requests from their own origin
   by default.** With `allowed_origins` unset, a request whose `Origin` header names

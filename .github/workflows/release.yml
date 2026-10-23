@@ -1,12 +1,19 @@
 name: Release
 
 # Publishing a GitHub Release uploads that version to PyPI.
-# Running this workflow by hand ("Run workflow") uploads the current commit to TestPyPI,
-# for a practice run. Both use PyPI trusted publishing: no API token is stored here.
+# Running this workflow by hand ("Run workflow") uploads to TestPyPI by default, as a
+# practice run, or to PyPI when "pypi" is chosen and the run is on a version tag (vX.Y.Z)
+# matching pyproject.toml. All uploads use PyPI trusted publishing: no API token is stored here.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      target:
+        description: Where to upload. "pypi" requires running on a version tag.
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
 
 permissions:
   contents: read
@@ -28,10 +35,15 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked
       - name: Release tag matches the package version
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'pypi'
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          REF_TYPE: ${{ github.event_name == 'release' && 'tag' || github.ref_type }}
         run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "Publishing to PyPI by hand must run on a version tag, not the branch $TAG" >&2
+            exit 1
+          fi
           version="$(uv version --short)"
           if [ "${TAG#v}" != "$version" ]; then
             echo "Release tag $TAG does not match version $version in pyproject.toml" >&2
@@ -63,7 +75,7 @@ jobs:
       # TestPyPI never accepts the same file name twice, so each practice run gets its
       # own pre-release version, e.g. 0.3.0.dev1201 for run 12, attempt 1.
       - name: Give a TestPyPI practice build a unique dev version
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.target != 'pypi'
         run: uv version --frozen "$(uv version --short).dev$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))"
       - name: Build sdist and wheel
         run: uv build --no-sources
@@ -80,7 +92,7 @@ jobs:
 
   publish-testpypi:
     name: Publish to TestPyPI
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.target != 'pypi'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -101,7 +113,7 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.target == 'pypi'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10

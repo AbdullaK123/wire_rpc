@@ -27,6 +27,11 @@ should do.
    --extra-index-url https://pypi.org/simple/ wire-rpc`.
 6. Create a GitHub Release with the tag `vx.y.z` and publish it.
 
+   Or, without a GitHub Release: push the tag (`git tag vx.y.z && git push origin
+   vx.y.z`), then Actions → Release → Run workflow, choose the tag under "Use
+   workflow from" and `pypi` as the target. Choosing `pypi` on a branch fails on
+   purpose. "Run workflow" with the default target never touches PyPI.
+
 The workflow then:
 
 1. checks that the tag matches the version in `pyproject.toml`, and stops if not,
